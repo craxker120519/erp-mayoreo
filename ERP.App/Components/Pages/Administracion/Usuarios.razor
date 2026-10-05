@@ -1,0 +1,291 @@
+@page "/administracion/usuarios"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<PageTitle>Usuarios</PageTitle>
+
+<h1>Usuarios</h1>
+<p class="text-muted">Cada usuario puede tener varios módulos a la vez -- por ejemplo Almacén + Facturación. "Admin" tiene acceso total, incluyendo esta pantalla.</p>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para administrar usuarios.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5 class="card-title">@(editandoId is null ? "Nuevo usuario" : $"Editar {editandoUsername}")</h5>
+            <div class="row g-2">
+                @if (editandoId is null)
+                {
+                    <div class="col-md-3">
+                        <input class="form-control" placeholder="Usuario" @bind="nuevoUsername" />
+                    </div>
+                    <div class="col-md-3">
+                        <input type="password" class="form-control" placeholder="Contraseña" @bind="nuevoPassword" />
+                    </div>
+                }
+                else
+                {
+                    <div class="col-md-3">
+                        <div class="form-check form-switch mt-2">
+                            <input class="form-check-input" type="checkbox" id="activo" @bind="editandoActivo" />
+                            <label class="form-check-label" for="activo">Activo</label>
+                        </div>
+                    </div>
+                }
+            </div>
+
+            <div class="mt-2">
+                <label class="form-label small mb-1">Módulos</label>
+                <div class="d-flex flex-wrap gap-3">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="rol-admin"
+                               checked="@rolesSeleccionados.Contains("Admin")"
+                               @onchange="@(e => AlternarRol("Admin", (bool)e.Value!))" />
+                        <label class="form-check-label fw-bold" for="rol-admin">Admin (acceso total)</label>
+                    </div>
+                    @foreach (var modulo in modulos)
+                    {
+                        <div class="form-check">
+                            <input class="form-check-input" type="checkbox" id="@($"rol-{modulo}")"
+                                   checked="@rolesSeleccionados.Contains(modulo)"
+                                   @onchange="@(e => AlternarRol(modulo, (bool)e.Value!))" />
+                            <label class="form-check-label" for="@($"rol-{modulo}")">@modulo</label>
+                        </div>
+                    }
+                </div>
+            </div>
+
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-primary" @onclick="Guardar" disabled="@(guardando || !PuedeGuardar())">
+                    @(guardando ? "Guardando…" : editandoId is null ? "Crear usuario" : "Guardar cambios")
+                </button>
+                @if (editandoId is not null)
+                {
+                    <button class="btn btn-outline-secondary" @onclick="CancelarEdicion">Cancelar</button>
+                }
+            </div>
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-1">@mensaje</div>
+            }
+        </div>
+    </div>
+
+    @if (usuarios is null)
+    {
+        <p><em>Cargando…</em></p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped align-middle">
+            <thead><tr><th>Usuario</th><th>Módulos</th><th>Estatus</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var u in usuarios)
+                {
+                    <tr>
+                        <td>@u.Username</td>
+                        <td>
+                            @foreach (var r in u.Roles)
+                            {
+                                <span class="badge text-bg-secondary me-1">@r</span>
+                            }
+                        </td>
+                        <td>@(u.Activo ? "Activo" : "Inactivo")</td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(u)">Editar</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => MostrarCambiarPassword(u.Id)">Cambiar contraseña</button>
+                        </td>
+                    </tr>
+                    @if (cambiandoPasswordId == u.Id)
+                    {
+                        <tr>
+                            <td colspan="4">
+                                <div class="d-flex gap-2 align-items-center">
+                                    <input type="password" class="form-control form-control-sm" style="max-width: 260px;"
+                                           placeholder="Nueva contraseña" @bind="passwordNueva" />
+                                    <button class="btn btn-sm btn-primary" @onclick="() => CambiarPassword(u.Id)">Guardar</button>
+                                    <button class="btn btn-sm btn-outline-secondary" @onclick="() => cambiandoPasswordId = null">Cancelar</button>
+                                </div>
+                            </td>
+                        </tr>
+                    }
+                }
+            </tbody>
+        </table>
+    }
+
+    <div class="card mt-4" style="max-width: 500px;">
+        <div class="card-body">
+            <h5 class="card-title">Candados</h5>
+            <p class="text-muted small">Contraseña propia (no la de login) que se pide una vez por sesión para ver Facturación y Cuentas por cobrar/pagar.</p>
+            @foreach (var candado in candados)
+            {
+                <div class="d-flex gap-2 align-items-center mb-2">
+                    <span style="width: 120px;">@candado</span>
+                    <input type="password" class="form-control form-control-sm" placeholder="Nueva contraseña"
+                           @bind="passwordsCandados[candado]" />
+                    <button class="btn btn-sm btn-outline-primary" @onclick="() => CambiarPasswordCandado(candado)">Cambiar</button>
+                </div>
+            }
+            @if (!string.IsNullOrWhiteSpace(mensajeCandado))
+            {
+                <div class="alert alert-info py-1 mb-0">@mensajeCandado</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    // Mismo listado que ERP.Api/Controllers/UsuariosController.cs (Modulos.Departamentos) -- se
+    // duplica aquí porque ERP.App no referencia el proyecto Web API, mismo patrón que los DTOs.
+    private readonly string[] modulos =
+        ["Compras", "Ventas", "Facturacion", "CuentasPorCobrar", "CuentasPorPagar", "Almacen", "Cajero"];
+
+    private List<Usuario>? usuarios;
+    private int? editandoId;
+    private string? editandoUsername;
+    private bool editandoActivo = true;
+    private readonly HashSet<string> rolesSeleccionados = [];
+
+    private string nuevoUsername = string.Empty;
+    private string nuevoPassword = string.Empty;
+
+    private int? cambiandoPasswordId;
+    private string passwordNueva = string.Empty;
+
+    private bool guardando;
+    private string? mensaje;
+
+    protected override async Task OnInitializedAsync() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        usuarios = (await Api.GetUsuariosAsync()).OrderBy(u => u.Username).ToList();
+    }
+
+    private void AlternarRol(string rol, bool marcado)
+    {
+        if (marcado)
+        {
+            rolesSeleccionados.Add(rol);
+        }
+        else
+        {
+            rolesSeleccionados.Remove(rol);
+        }
+    }
+
+    private bool PuedeGuardar() =>
+        rolesSeleccionados.Count > 0 && (editandoId is not null ||
+            (!string.IsNullOrWhiteSpace(nuevoUsername) && !string.IsNullOrWhiteSpace(nuevoPassword)));
+
+    private void Editar(Usuario usuario)
+    {
+        editandoId = usuario.Id;
+        editandoUsername = usuario.Username;
+        editandoActivo = usuario.Activo;
+        rolesSeleccionados.Clear();
+        foreach (var r in usuario.Roles)
+        {
+            rolesSeleccionados.Add(r);
+        }
+        mensaje = null;
+    }
+
+    private void CancelarEdicion()
+    {
+        editandoId = null;
+        editandoUsername = null;
+        rolesSeleccionados.Clear();
+        nuevoUsername = string.Empty;
+        nuevoPassword = string.Empty;
+        mensaje = null;
+    }
+
+    private async Task Guardar()
+    {
+        if (!PuedeGuardar())
+        {
+            return;
+        }
+
+        guardando = true;
+        mensaje = null;
+        try
+        {
+            if (editandoId is int id)
+            {
+                await Api.ActualizarUsuarioAsync(id, new ActualizarUsuarioRequest(rolesSeleccionados.ToList(), editandoActivo));
+            }
+            else
+            {
+                await Api.CrearUsuarioAsync(new CrearUsuarioRequest(nuevoUsername.Trim(), nuevoPassword, rolesSeleccionados.ToList()));
+            }
+
+            CancelarEdicion();
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private void MostrarCambiarPassword(int id)
+    {
+        cambiandoPasswordId = id;
+        passwordNueva = string.Empty;
+    }
+
+    private async Task CambiarPassword(int id)
+    {
+        if (string.IsNullOrWhiteSpace(passwordNueva))
+        {
+            return;
+        }
+
+        try
+        {
+            await Api.CambiarPasswordUsuarioAsync(id, new CambiarPasswordRequest(passwordNueva));
+            cambiandoPasswordId = null;
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo cambiar la contraseña: {ex.Message}";
+        }
+    }
+
+    // Solo hay 2 candados fijos (Facturacion, Cuentas), sembrados por Program.cs -- se listan a
+    // mano igual que `modulos`, no hace falta un endpoint GET para 2 nombres constantes.
+    private readonly string[] candados = ["Facturacion", "Cuentas"];
+    private readonly Dictionary<string, string> passwordsCandados = new() { ["Facturacion"] = "", ["Cuentas"] = "" };
+    private string? mensajeCandado;
+
+    private async Task CambiarPasswordCandado(string nombre)
+    {
+        var nueva = passwordsCandados.GetValueOrDefault(nombre, "");
+        if (string.IsNullOrWhiteSpace(nueva))
+        {
+            return;
+        }
+
+        try
+        {
+            await Api.CambiarPasswordCandadoAsync(nombre, new CambiarPasswordRequest(nueva));
+            passwordsCandados[nombre] = "";
+            mensajeCandado = $"Contraseña del candado \"{nombre}\" actualizada.";
+        }
+        catch (Exception ex)
+        {
+            mensajeCandado = $"No se pudo cambiar: {ex.Message}";
+        }
+    }
+}

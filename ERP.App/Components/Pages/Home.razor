@@ -1,0 +1,182 @@
+@page "/"
+@using ERP.App.Dtos
+@using ERP.App.Services
+@inject IErpApiClient Api
+@inject AppSessionService AppSession
+
+<PageTitle>Inicio</PageTitle>
+
+<h1>Panel</h1>
+
+<div class="row g-3">
+    @if (AppSession.HasRole("Cajero"))
+    {
+        <div class="col-md-3">
+            <a href="/mostrador" class="text-decoration-none">
+                <div class="card h-100"><div class="card-body">
+                    <div class="text-muted small">Turno de caja</div>
+                    <div class="fs-4 @(turnoAbierto ? "text-success" : "")">@(turnoAbierto ? "Abierto" : "Cerrado")</div>
+                </div></div>
+            </a>
+        </div>
+    }
+    @if (AppSession.HasRole("Almacen") || AppSession.HasRole("Ventas") || AppSession.HasRole("Compras"))
+    {
+        <div class="col-md-3">
+            <a href="/reportes" class="text-decoration-none">
+                <div class="card h-100"><div class="card-body">
+                    <div class="text-muted small">Productos bajo stock mínimo</div>
+                    <div class="fs-4 @(productosBajoMinimo > 0 ? "text-danger" : "")">@productosBajoMinimo</div>
+                </div></div>
+            </a>
+        </div>
+    }
+    @if (AppSession.HasRole("Ventas"))
+    {
+        <div class="col-md-3">
+            <a href="/ventas" class="text-decoration-none">
+                <div class="card h-100"><div class="card-body">
+                    <div class="text-muted small">Cotizaciones/pedidos abiertos</div>
+                    <div class="fs-4">@pedidosAbiertos</div>
+                </div></div>
+            </a>
+        </div>
+    }
+    @if (AppSession.HasRole("Compras") || AppSession.HasRole("CuentasPorPagar"))
+    {
+        <div class="col-md-3">
+            <a href="/compras" class="text-decoration-none">
+                <div class="card h-100"><div class="card-body">
+                    <div class="text-muted small">Órdenes de compra pendientes</div>
+                    <div class="fs-4">@ordenesPendientes</div>
+                </div></div>
+            </a>
+        </div>
+    }
+</div>
+
+<div class="mt-4 d-flex gap-2">
+    @if (AppSession.HasRole("Cajero"))
+    {
+        <a class="btn btn-outline-primary" href="/mostrador">Ir a mostrador</a>
+    }
+    @if (AppSession.HasRole("Ventas"))
+    {
+        <a class="btn btn-outline-primary" href="/ventas/nuevo">Nueva cotización</a>
+    }
+    @if (AppSession.HasRole("Compras"))
+    {
+        <a class="btn btn-outline-primary" href="/compras/nuevo">Nueva orden de compra</a>
+    }
+    @if (AppSession.HasRole("Almacen") || AppSession.HasRole("Ventas") || AppSession.HasRole("Compras") || AppSession.HasRole("Facturacion") || AppSession.HasRole("CuentasPorCobrar") || AppSession.HasRole("CuentasPorPagar"))
+    {
+        <a class="btn btn-outline-secondary" href="/reportes">Ver reportes</a>
+    }
+</div>
+
+@if (AppSession.HasRole("Ventas") || AppSession.HasRole("Facturacion") || AppSession.HasRole("CuentasPorCobrar") || AppSession.HasRole("Almacen") || AppSession.HasRole("Compras"))
+{
+    <div class="row g-3 mt-1">
+        @if (AppSession.HasRole("Ventas") || AppSession.HasRole("Facturacion") || AppSession.HasRole("CuentasPorCobrar"))
+        {
+            <div class="col-md-6">
+                <h5>Cartera vencida</h5>
+                <CandadoGate Nombre="Cuentas">
+                    @if (carteraVencida.Count == 0)
+                    {
+                        <p class="text-muted">Sin cartera vencida.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm">
+                            <thead><tr><th>Folio</th><th>Cliente</th><th>Saldo</th></tr></thead>
+                            <tbody>
+                                @foreach (var c in carteraVencida.Take(5))
+                                {
+                                    <tr><td>@c.Folio</td><td>@c.Cliente</td><td class="text-danger">@c.Saldo.ToString("C")</td></tr>
+                                }
+                            </tbody>
+                        </table>
+                        @if (carteraVencida.Count > 5)
+                        {
+                            <a href="/reportes" class="small">Ver las @carteraVencida.Count en Reportes →</a>
+                        }
+                    }
+                </CandadoGate>
+            </div>
+        }
+        @if (AppSession.HasRole("Almacen") || AppSession.HasRole("Ventas") || AppSession.HasRole("Compras"))
+        {
+            <div class="col-md-6">
+                <h5>Stock bajo mínimo</h5>
+                @if (existenciasBajas.Count == 0)
+                {
+                    <p class="text-muted">Todo el inventario está por arriba de su mínimo.</p>
+                }
+                else
+                {
+                    <table class="table table-sm">
+                        <thead><tr><th>Producto</th><th>Existencia</th><th>Mínimo</th></tr></thead>
+                        <tbody>
+                            @foreach (var e in existenciasBajas.Take(5))
+                            {
+                                <tr><td>@e.Producto</td><td class="text-danger">@e.Cantidad @e.UnidadVenta</td><td>@e.StockMinimo @e.UnidadVenta</td></tr>
+                            }
+                        </tbody>
+                    </table>
+                    @if (existenciasBajas.Count > 5)
+                    {
+                        <a href="/reportes" class="small">Ver las @existenciasBajas.Count en Reportes →</a>
+                    }
+                }
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private bool turnoAbierto;
+    private int productosBajoMinimo;
+    private int pedidosAbiertos;
+    private int ordenesPendientes;
+    private List<CarteraVencidaReporte> carteraVencida = [];
+    private List<ExistenciaReporte> existenciasBajas = [];
+
+    // Cada llamada solo se hace si el rol actual tiene acceso al controller correspondiente --
+    // de lo contrario la API responde 403 y, sin este filtro, el panel entero tronaba al cargar
+    // (el ErrorBoundary de MainLayout lo atajaba, pero mostraba una pantalla rota en vez del panel).
+    protected override async Task OnInitializedAsync()
+    {
+        if (AppSession.HasRole("Cajero"))
+        {
+            turnoAbierto = await Api.GetTurnoActualAsync() is not null;
+        }
+
+        if (AppSession.HasRole("Almacen") || AppSession.HasRole("Ventas") || AppSession.HasRole("Compras"))
+        {
+            var existencias = await Api.GetExistenciasAsync();
+            existenciasBajas = existencias.Where(e => e.Cantidad < e.StockMinimo).OrderBy(e => e.Cantidad).ToList();
+            productosBajoMinimo = existenciasBajas.Count;
+        }
+
+        if (AppSession.HasRole("Ventas"))
+        {
+            // DocumentosGenerados.Count == 0 = todavía no avanzó a la siguiente etapa -- si ya se
+            // convirtió/remisionó, esta fila queda como historial y ya no cuenta como "abierta".
+            pedidosAbiertos = (await Api.GetPedidosVentaAsync())
+                .Count(p => p.Estatus is EstatusPedidoVenta.Cotizacion or EstatusPedidoVenta.Pedido
+                    && (p.DocumentosGenerados?.Count ?? 0) == 0);
+        }
+
+        if (AppSession.HasRole("Ventas") || AppSession.HasRole("Facturacion") || AppSession.HasRole("CuentasPorCobrar"))
+        {
+            carteraVencida = (await Api.GetCarteraVencidaAsync()).OrderByDescending(c => c.Saldo).ToList();
+        }
+
+        if (AppSession.HasRole("Compras") || AppSession.HasRole("CuentasPorPagar"))
+        {
+            ordenesPendientes = (await Api.GetPedidosCompraAsync())
+                .Count(p => p.Estatus == EstatusPedidoCompra.Solicitado);
+        }
+    }
+}

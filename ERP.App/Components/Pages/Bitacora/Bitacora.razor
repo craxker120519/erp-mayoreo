@@ -1,0 +1,44 @@
+@page "/bitacora"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@inject IErpApiClient Api
+
+<PageTitle>Bitácora</PageTitle>
+
+<h1>Bitácora</h1>
+<p class="text-muted">Quién hizo qué -- creación, cancelación, remisión, recepción, aperturas/cierres de turno y aplicación de crédito. Solo visible para Admin.</p>
+
+@if (eventos is null)
+{
+    <p><em>Cargando…</em></p>
+}
+else if (eventos.Count == 0)
+{
+    <p class="text-muted">Todavía no hay eventos registrados.</p>
+}
+else
+{
+    <table class="table table-sm table-striped">
+        <thead><tr><th>Fecha</th><th>Usuario</th><th>Acción</th><th>Entidad</th><th>Detalle</th></tr></thead>
+        <tbody>
+            @foreach (var e in eventos)
+            {
+                <tr>
+                    <td>@e.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td>
+                    <td>@e.Usuario</td>
+                    <td>@e.Accion</td>
+                    <td>@e.Entidad@(e.EntidadId is int id ? $" #{id}" : "")</td>
+                    <td>@e.Detalle</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<ERP.Models.BitacoraEvento>? eventos;
+
+    protected override async Task OnInitializedAsync()
+    {
+        eventos = await Api.GetBitacoraAsync();
+    }
+}

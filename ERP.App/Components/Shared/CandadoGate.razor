@@ -1,0 +1,78 @@
+@* Candado de contraseña propia (no la del login) delante de contenido sensible -- Facturación,
+   Cuentas por cobrar/pagar. Se desbloquea una vez por sesión (AppSessionService.CandadoDesbloqueado),
+   no en cada clic; se resetea al cerrar sesión. *@
+@inject IErpApiClient Api
+@inject AppSessionService AppSession
+
+@if (AppSession.CandadoDesbloqueado(Nombre))
+{
+    @ChildContent
+}
+else
+{
+    <div class="card mb-3" style="max-width: 420px;">
+        <div class="card-body">
+            <h6 class="card-title"><span class="bi bi-lock-fill"></span> @Titulo</h6>
+            <p class="text-muted small">Esta sección requiere la contraseña del candado (distinta a tu contraseña de acceso).</p>
+            <div class="d-flex gap-2">
+                <input type="password" class="form-control" placeholder="Contraseña del candado" @bind="password" @bind:event="oninput"
+                       @onkeyup="@(e => { if (e.Key == "Enter") { _ = Desbloquear(); } })" />
+                <button class="btn btn-primary" @onclick="Desbloquear" disabled="@(verificando || string.IsNullOrWhiteSpace(password))">
+                    @(verificando ? "…" : "Desbloquear")
+                </button>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(error))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-1">@error</div>
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Nombre { get; set; } = string.Empty;
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+
+    private string password = string.Empty;
+    private bool verificando;
+    private string? error;
+
+    private string Titulo => Nombre switch
+    {
+        "Facturacion" => "Facturación protegida",
+        "Cuentas" => "Cuentas protegidas",
+        _ => "Sección protegida"
+    };
+
+    private async Task Desbloquear()
+    {
+        if (string.IsNullOrWhiteSpace(password))
+        {
+            return;
+        }
+
+        verificando = true;
+        error = null;
+        try
+        {
+            var ok = await Api.VerificarCandadoAsync(Nombre, password);
+            if (ok)
+            {
+                AppSession.MarcarCandadoDesbloqueado(Nombre);
+                password = string.Empty;
+            }
+            else
+            {
+                error = "Contraseña incorrecta.";
+            }
+        }
+        catch (Exception ex)
+        {
+            error = $"No se pudo verificar: {ex.Message}";
+        }
+        finally
+        {
+            verificando = false;
+        }
+    }
+}

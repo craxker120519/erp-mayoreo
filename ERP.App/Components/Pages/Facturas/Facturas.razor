@@ -1,0 +1,83 @@
+@page "/facturas"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@inject IErpApiClient Api
+
+<PageTitle>Facturas</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center">
+    <h1>Facturas</h1>
+    <a class="btn btn-primary" href="/facturas/nueva">+ Factura directa</a>
+</div>
+<div class="alert alert-warning">
+    Estos comprobantes son de uso interno — todavía no son CFDI válidos ante el SAT. Se conectará
+    un PAC (Facturama, SW Sapien, Finkok, etc.) más adelante para timbrar de verdad.
+</div>
+
+<CandadoGate Nombre="Facturacion">
+    @if (facturas is null)
+    {
+        <p><em>Cargando…</em></p>
+    }
+    else if (facturas.Count == 0)
+    {
+        <p class="text-muted">Todavía no se ha generado ninguna factura. Se generan desde el detalle de un pedido ya remisionado, en Ventas mayoreo.</p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped align-middle">
+            <thead><tr><th>Folio</th><th>Pedido</th><th>Cliente</th><th>Fecha</th><th>Total</th><th>Estatus</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var f in facturas)
+                {
+                    <tr>
+                        <td>@f.Folio</td>
+                        <td><a href="/ventas/@f.PedidoVentaId">@f.PedidoVenta.Folio</a></td>
+                        <td>@f.PedidoVenta.Cliente.Nombre</td>
+                        <td>@f.FechaEmisionUtc.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                        <td>@f.Total.ToString("C")</td>
+                        <td><span class="badge @EstatusBadge(f.Estatus)">@f.Estatus</span></td>
+                        <td><button class="btn btn-sm btn-outline-primary" @onclick="() => Descargar(f.Id)">PDF</button></td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+</CandadoGate>
+
+@if (!string.IsNullOrWhiteSpace(mensaje))
+{
+    <div class="alert alert-danger">@mensaje</div>
+}
+
+@code {
+    private List<Factura>? facturas;
+    private string? mensaje;
+
+    protected override async Task OnInitializedAsync()
+    {
+        facturas = await Api.GetFacturasAsync();
+    }
+
+    private async Task Descargar(int facturaId)
+    {
+        try
+        {
+            var bytes = await Api.GetFacturaPdfAsync(facturaId);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"factura-{facturaId}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Factura", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+
+    private static string EstatusBadge(EstatusFactura estatus) => estatus switch
+    {
+        EstatusFactura.EmitidaInterna => "text-bg-secondary",
+        EstatusFactura.TimbradaCfdi => "text-bg-success",
+        EstatusFactura.Cancelada => "text-bg-dark",
+        _ => "text-bg-light"
+    };
+}

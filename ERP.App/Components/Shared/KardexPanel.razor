@@ -1,0 +1,172 @@
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<div class="d-flex justify-content-between align-items-start flex-wrap gap-2 mb-2">
+    <div>
+        <label class="form-label small mb-1 d-block">Almacén(es)</label>
+        @if (almacenes.Count <= 1)
+        {
+            <span class="text-muted small">@(almacenes.Count == 1 ? almacenes[0].Nombre : "Sin almacenes")</span>
+        }
+        else
+        {
+            <div class="d-flex flex-wrap gap-3">
+                @foreach (var a in almacenes)
+                {
+                    <div class="form-check form-check-inline mb-0">
+                        <input class="form-check-input" type="checkbox" id="@($"kx-{instanceId}-{a.Id}")"
+                               checked="@seleccionados.Contains(a.Id)"
+                               @onchange="@(e => Alternar(a.Id, (bool)e.Value!))" />
+                        <label class="form-check-label small" for="@($"kx-{instanceId}-{a.Id}")">@a.Nombre</label>
+                    </div>
+                }
+            </div>
+        }
+    </div>
+    @if (movimientos.Count > 0)
+    {
+        <div class="d-flex gap-2">
+            <button class="btn btn-sm btn-outline-secondary" @onclick="DescargarPdf">PDF</button>
+            <button class="btn btn-sm btn-outline-secondary" @onclick="DescargarExcel">Excel</button>
+        </div>
+    }
+</div>
+
+@if (cargando)
+{
+    <p><em>Cargando…</em></p>
+}
+else if (seleccionados.Count == 0)
+{
+    <p class="text-muted">Selecciona al menos un almacén.</p>
+}
+else if (movimientos.Count == 0)
+{
+    <p class="text-muted">Este producto todavía no tiene movimientos registrados en los almacenes seleccionados.</p>
+}
+else
+{
+    @foreach (var grupo in Grupos)
+    {
+        @if (Grupos.Count > 1)
+        {
+            <h6 class="mt-3">@grupo.Key</h6>
+        }
+        <table class="table table-sm mb-3">
+            <thead><tr><th>Fecha</th><th>Tipo</th><th class="text-end">Cantidad</th><th class="text-end">Saldo</th><th>Documento</th><th>Motivo</th></tr></thead>
+            <tbody>
+                @foreach (var m in grupo)
+                {
+                    <tr>
+                        <td>@m.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</td>
+                        <td>
+                            <span class="badge @(m.Tipo == TipoMovimiento.Entrada ? "text-bg-success" : "text-bg-danger")">
+                                @(m.Tipo == TipoMovimiento.Entrada ? "Entrada" : "Salida")
+                            </span>
+                        </td>
+                        <td class="text-end">@(m.Tipo == TipoMovimiento.Entrada ? "+" : "-")@m.Cantidad</td>
+                        <td class="text-end"><strong>@m.Saldo</strong></td>
+                        <td>@m.Referencia</td>
+                        <td class="text-muted small">@m.Nota</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@if (!string.IsNullOrWhiteSpace(mensaje))
+{
+    <div class="alert alert-danger py-1">@mensaje</div>
+}
+
+@code {
+    [Parameter, EditorRequired] public int ProductoId { get; set; }
+
+    private static int _secuencia;
+    private readonly int instanceId = System.Threading.Interlocked.Increment(ref _secuencia);
+
+    private List<Almacen> almacenes = [];
+    private readonly HashSet<int> seleccionados = [];
+    private List<KardexMovimiento> movimientos = [];
+    private bool cargando;
+    private int? productoIdCargado;
+    private string? mensaje;
+
+    private List<IGrouping<string, KardexMovimiento>> Grupos => movimientos.GroupBy(m => m.Almacen).ToList();
+
+    protected override async Task OnParametersSetAsync()
+    {
+        if (productoIdCargado == ProductoId)
+        {
+            return;
+        }
+
+        productoIdCargado = ProductoId;
+        almacenes = (await Api.GetAlmacenesAsync()).OrderBy(a => a.Nombre).ToList();
+        seleccionados.Clear();
+        foreach (var a in almacenes)
+        {
+            seleccionados.Add(a.Id);
+        }
+
+        await CargarAsync();
+    }
+
+    private async Task Alternar(int almacenId, bool marcado)
+    {
+        if (marcado)
+        {
+            seleccionados.Add(almacenId);
+        }
+        else
+        {
+            seleccionados.Remove(almacenId);
+        }
+
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        if (seleccionados.Count == 0)
+        {
+            movimientos = [];
+            return;
+        }
+
+        cargando = true;
+        movimientos = await Api.GetKardexAsync(ProductoId, seleccionados.ToList());
+        cargando = false;
+    }
+
+    private async Task DescargarPdf()
+    {
+        try
+        {
+            var bytes = await Api.GetKardexPdfAsync(ProductoId, seleccionados.ToList());
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"kardex-{ProductoId}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Kardex", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+
+    private async Task DescargarExcel()
+    {
+        try
+        {
+            var bytes = await Api.GetKardexExcelAsync(ProductoId, seleccionados.ToList());
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"kardex-{ProductoId}-{DateTime.Now:HHmmssfff}.xlsx");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Kardex", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el Excel: {ex.Message}";
+        }
+    }
+}

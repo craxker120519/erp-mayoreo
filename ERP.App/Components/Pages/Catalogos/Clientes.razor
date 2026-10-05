@@ -1,0 +1,195 @@
+@page "/catalogos/clientes"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<PageTitle>Clientes</PageTitle>
+
+<h1>Clientes</h1>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para administrar este catálogo.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5 class="card-title">@(editandoId is null ? "Nuevo cliente" : "Editar cliente")</h5>
+            <div class="row g-2">
+                <div class="col-md-4"><input class="form-control" placeholder="Nombre / razón social" @bind="form.Nombre" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="RFC" @bind="form.Rfc" /></div>
+                <div class="col-md-2">
+                    <select class="form-select" @bind="form.Tipo">
+                        <option value="@TipoCliente.Mayoreo">Mayoreo</option>
+                        <option value="@TipoCliente.Publico">Público en general</option>
+                    </select>
+                </div>
+                <div class="col-md-2"><input class="form-control" placeholder="Teléfono" @bind="form.Telefono" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Email" @bind="form.Email" /></div>
+                <div class="col-md-6"><input class="form-control" placeholder="Dirección" @bind="form.Direccion" /></div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-0">Días de crédito</label>
+                    <input type="number" min="0" class="form-control" @bind="form.DiasCredito" />
+                </div>
+                <div class="col-md-3">
+                    <label class="form-label small mb-0">Límite de crédito</label>
+                    <input type="number" min="0" step="0.01" class="form-control" @bind="form.LimiteCredito" />
+                </div>
+            </div>
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-primary" @onclick="Guardar" disabled="@(guardando || string.IsNullOrWhiteSpace(form.Nombre))">
+                    @(guardando ? "Guardando…" : editandoId is null ? "Agregar" : "Guardar cambios")
+                </button>
+                @if (editandoId is not null)
+                {
+                    <button class="btn btn-outline-secondary" @onclick="CancelarEdicion">Cancelar</button>
+                }
+            </div>
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-1">@mensaje</div>
+            }
+        </div>
+    </div>
+
+    @if (clientes is not null && clientes.Count > 0)
+    {
+        <input class="form-control mb-2" style="max-width: 320px;" placeholder="Buscar por nombre o RFC…"
+               @bind="filtro" @bind:event="oninput" />
+    }
+
+    @if (clientes is null)
+    {
+        <p><em>Cargando…</em></p>
+    }
+    else if (clientes.Count == 0)
+    {
+        <p class="text-muted">Todavía no hay clientes registrados.</p>
+    }
+    else if (ClientesFiltrados.Count == 0)
+    {
+        <p class="text-muted">Ningún cliente coincide con "@filtro".</p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped align-middle">
+            <thead>
+                <tr><th>Nombre</th><th>RFC</th><th>Tipo</th><th>Crédito</th><th>Estatus</th><th></th></tr>
+            </thead>
+            <tbody>
+                @foreach (var c in ClientesFiltrados)
+                {
+                    <tr>
+                        <td>@c.Nombre</td>
+                        <td>@c.Rfc</td>
+                        <td>@(c.Tipo == TipoCliente.Mayoreo ? "Mayoreo" : "Público")</td>
+                        <td>@(c.DiasCredito > 0 ? $"{c.DiasCredito} días / {c.LimiteCredito:C}" : "Contado")</td>
+                        <td>@(c.Activo ? "Activo" : "Inactivo")</td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(c)">Editar</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => AlternarActivo(c)">
+                                @(c.Activo ? "Desactivar" : "Reactivar")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<Cliente>? clientes;
+    private Cliente form = new();
+    private int? editandoId;
+    private string? mensaje;
+    private string filtro = string.Empty;
+    private bool guardando;
+
+    private List<Cliente> ClientesFiltrados =>
+        string.IsNullOrWhiteSpace(filtro)
+            ? clientes ?? []
+            : (clientes ?? []).Where(c =>
+                c.Nombre.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (c.Rfc?.Contains(filtro, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+
+    protected override async Task OnInitializedAsync() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        clientes = (await Api.GetClientesAsync()).OrderBy(c => c.Nombre).ToList();
+    }
+
+    private void Editar(Cliente cliente)
+    {
+        editandoId = cliente.Id;
+        form = new Cliente
+        {
+            Nombre = cliente.Nombre,
+            Rfc = cliente.Rfc,
+            Tipo = cliente.Tipo,
+            Telefono = cliente.Telefono,
+            Email = cliente.Email,
+            Direccion = cliente.Direccion,
+            DiasCredito = cliente.DiasCredito,
+            LimiteCredito = cliente.LimiteCredito
+        };
+    }
+
+    private void CancelarEdicion()
+    {
+        editandoId = null;
+        form = new();
+    }
+
+    private async Task Guardar()
+    {
+        if (string.IsNullOrWhiteSpace(form.Nombre))
+        {
+            return;
+        }
+
+        mensaje = null;
+        guardando = true;
+        try
+        {
+            var request = new ClienteRequest(
+                form.Nombre.Trim(), form.Rfc?.Trim(), form.Tipo, form.Telefono?.Trim(), form.Email?.Trim(),
+                form.Direccion?.Trim(), form.DiasCredito, form.LimiteCredito);
+
+            if (editandoId is int id)
+            {
+                await Api.ActualizarClienteAsync(id, request);
+            }
+            else
+            {
+                await Api.CrearClienteAsync(request);
+            }
+
+            CancelarEdicion();
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task AlternarActivo(Cliente cliente)
+    {
+        try
+        {
+            await Api.AlternarActivoClienteAsync(cliente.Id);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo actualizar el estatus: {ex.Message}";
+        }
+    }
+}

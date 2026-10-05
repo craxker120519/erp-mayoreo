@@ -1,0 +1,100 @@
+@page "/ventas"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@inject IErpApiClient Api
+
+<PageTitle>Ventas mayoreo</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1>Ventas mayoreo</h1>
+    @if (AppSession.HasRole("Ventas"))
+    {
+        <a class="btn btn-primary" href="/ventas/nuevo">Nueva cotización</a>
+    }
+</div>
+
+@if (pedidos is not null && pedidos.Count > 0)
+{
+    <div class="btn-group mb-3" role="group">
+        @foreach (var opcion in filtros)
+        {
+            <button type="button" class="btn btn-sm @(filtro == opcion ? "btn-secondary" : "btn-outline-secondary")"
+                    @onclick="() => filtro = opcion">
+                @opcion
+            </button>
+        }
+    </div>
+}
+
+@if (pedidos is null)
+{
+    <p><em>Cargando…</em></p>
+}
+else if (pedidos.Count == 0)
+{
+    <p class="text-muted">Todavía no hay cotizaciones ni pedidos.</p>
+}
+else if (PedidosFiltrados.Count == 0)
+{
+    <p class="text-muted">No hay pedidos con estatus "@filtro".</p>
+}
+else
+{
+    <table class="table table-sm table-striped align-middle">
+        <thead><tr><th>Folio</th><th>Cliente</th><th>Fecha</th><th>Estatus</th><th>Total</th><th>Saldo</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var p in PedidosFiltrados)
+            {
+                var saldo = p.Total - p.Pagos.Sum(x => x.Monto) - p.CreditoRecibido.Sum(a => a.Monto);
+                <tr>
+                    <td>
+                        @p.Folio
+                        @if (p.DocumentosGenerados is { Count: > 0 })
+                        {
+                            <span class="text-muted small">→ @p.DocumentosGenerados.First().Folio</span>
+                        }
+                    </td>
+                    <td>@p.Cliente.Nombre</td>
+                    <td>@p.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                    <td><span class="badge @EstatusBadge(p.Estatus)">@p.Estatus</span></td>
+                    <td>@p.Total.ToString("C")</td>
+                    <td>
+                        @if (p.Estatus == EstatusPedidoVenta.Remisionado)
+                        {
+                            <span class="@(saldo > 0 ? "text-danger" : "text-success")">@saldo.ToString("C")</span>
+                        }
+                        else
+                        {
+                            <span class="text-muted">—</span>
+                        }
+                    </td>
+                    <td><a class="btn btn-sm btn-outline-primary" href="/ventas/@p.Id">Ver</a></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<PedidoVenta>? pedidos;
+    private readonly string[] filtros = ["Todos", "Cotizacion", "Pedido", "Remisionado", "Cancelado"];
+    private string filtro = "Todos";
+
+    private List<PedidoVenta> PedidosFiltrados =>
+        filtro == "Todos"
+            ? pedidos ?? []
+            : (pedidos ?? []).Where(p => p.Estatus.ToString() == filtro).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        pedidos = (await Api.GetPedidosVentaAsync()).OrderByDescending(p => p.FechaUtc).ToList();
+    }
+
+    private static string EstatusBadge(EstatusPedidoVenta estatus) => estatus switch
+    {
+        EstatusPedidoVenta.Cotizacion => "text-bg-secondary",
+        EstatusPedidoVenta.Pedido => "text-bg-warning",
+        EstatusPedidoVenta.Remisionado => "text-bg-success",
+        EstatusPedidoVenta.Cancelado => "text-bg-dark",
+        _ => "text-bg-light"
+    };
+}

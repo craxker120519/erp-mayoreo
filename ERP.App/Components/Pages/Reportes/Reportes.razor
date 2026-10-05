@@ -1,0 +1,303 @@
+@page "/reportes"
+@using ERP.App.Dtos
+@using ERP.App.Services
+@inject IErpApiClient Api
+@inject AppSessionService AppSession
+
+<PageTitle>Reportes</PageTitle>
+
+<h1>Reportes</h1>
+
+<ul class="nav nav-tabs mb-3">
+    @foreach (var tab in tabs)
+    {
+        <li class="nav-item">
+            <button class="nav-link @(tabActiva == tab ? "active" : "")" @onclick="() => tabActiva = tab">@tab</button>
+        </li>
+    }
+</ul>
+
+@if (tabActiva == "Existencias")
+{
+    @if (existencias.Count(e => e.Cantidad < e.StockMinimo) > 0)
+    {
+        <p class="text-danger">@existencias.Count(e => e.Cantidad < e.StockMinimo) producto(s) bajo su stock mínimo.</p>
+    }
+    <table class="table table-sm table-striped">
+        <thead><tr><th>Producto</th><th>Almacén</th><th>Existencia</th><th>Stock mínimo</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var e in existencias)
+            {
+                var bajoMinimo = e.Cantidad < e.StockMinimo;
+                <tr class="@(bajoMinimo ? "table-danger" : "")">
+                    <td>@e.Producto</td>
+                    <td>@e.Almacen</td>
+                    <td>@e.Cantidad @e.UnidadVenta</td>
+                    <td>@e.StockMinimo @e.UnidadVenta</td>
+                    <td>@(bajoMinimo ? "Bajo mínimo" : "")</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+else if (tabActiva == "Ventas por cliente/producto")
+{
+    <h5>Mayoreo — por cliente</h5>
+    <p class="text-muted small">Total: @ventasPorCliente.Sum(g => g.Total).ToString("C") en @ventasPorCliente.Sum(g => g.Pedidos) pedido(s)</p>
+    <table class="table table-sm table-striped mb-4">
+        <thead><tr><th>Cliente</th><th>Pedidos</th><th>Total</th></tr></thead>
+        <tbody>
+            @foreach (var g in ventasPorCliente)
+            {
+                <tr><td>@g.Cliente</td><td>@g.Pedidos</td><td>@g.Total.ToString("C")</td></tr>
+            }
+        </tbody>
+    </table>
+
+    <h5>Por producto (mayoreo + mostrador)</h5>
+    <table class="table table-sm table-striped">
+        <thead><tr><th>Producto</th><th>Cantidad vendida</th><th>Total</th></tr></thead>
+        <tbody>
+            @foreach (var g in ventasPorProducto)
+            {
+                <tr><td>@g.Producto</td><td>@g.Cantidad</td><td>@g.Total.ToString("C")</td></tr>
+            }
+        </tbody>
+    </table>
+}
+else if (tabActiva == "Utilidad")
+{
+    @if (utilidad.Count > 0)
+    {
+        var ventasTotal = utilidad.Sum(u => u.Ventas);
+        var utilidadTotal = utilidad.Sum(u => u.Utilidad);
+        var margenTotal = ventasTotal <= 0 ? 0 : utilidadTotal / ventasTotal * 100;
+        <p class="text-muted">
+            Ventas: <strong>@ventasTotal.ToString("C")</strong> —
+            Utilidad: <strong class="@(utilidadTotal >= 0 ? "text-success" : "text-danger")">@utilidadTotal.ToString("C")</strong>
+            (@margenTotal.ToString("0.0")% de margen)
+        </p>
+    }
+    <table class="table table-sm table-striped">
+        <thead><tr><th>Producto</th><th>Cantidad</th><th>Ventas</th><th>Costo</th><th>Utilidad</th><th>Margen</th></tr></thead>
+        <tbody>
+            @foreach (var u in utilidad)
+            {
+                <tr class="@(u.Utilidad < 0 ? "table-danger" : "")">
+                    <td>@u.Producto</td>
+                    <td>@u.Cantidad</td>
+                    <td>@u.Ventas.ToString("C")</td>
+                    <td>@u.Costo.ToString("C")</td>
+                    <td class="@(u.Utilidad >= 0 ? "text-success" : "text-danger")">@u.Utilidad.ToString("C")</td>
+                    <td>@u.MargenPct.ToString("0.0")%</td>
+                </tr>
+            }
+        </tbody>
+    </table>
+    @if (utilidad.Count == 0)
+    {
+        <p class="text-muted">Todavía no hay ventas para calcular utilidad.</p>
+    }
+    <p class="text-muted small mt-2">El costo usado es el costo promedio del producto AL MOMENTO de cada venta, no el costo actual -- así la utilidad de ventas viejas no cambia cuando entra una compra nueva con otro costo.</p>
+}
+else if (tabActiva == "Cartera vencida")
+{
+    <CandadoGate Nombre="Cuentas">
+        @if (carteraVencida.Count > 0)
+        {
+            <p class="text-danger">Total vencido: @carteraVencida.Sum(c => c.Saldo).ToString("C") en @carteraVencida.Count documento(s)</p>
+        }
+        <table class="table table-sm table-striped">
+            <thead><tr><th>Folio</th><th>Cliente</th><th>Fecha</th><th>Vence</th><th>Saldo</th></tr></thead>
+            <tbody>
+                @foreach (var c in carteraVencida)
+                {
+                    <tr class="table-danger">
+                        <td>@c.Folio</td>
+                        <td>@c.Cliente</td>
+                        <td>@c.Fecha.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                        <td>@c.Vence.ToString("dd/MM/yyyy")</td>
+                        <td>@c.Saldo.ToString("C")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (carteraVencida.Count == 0)
+        {
+            <p class="text-muted">Sin cartera vencida.</p>
+        }
+    </CandadoGate>
+}
+else if (tabActiva == "Cuentas por pagar")
+{
+    <CandadoGate Nombre="Cuentas">
+        @if (cuentasPorPagar.Count > 0)
+        {
+            <p class="text-danger">Total vencido: @cuentasPorPagar.Sum(c => c.Saldo).ToString("C") en @cuentasPorPagar.Count documento(s)</p>
+        }
+        <table class="table table-sm table-striped">
+            <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Vence</th><th>Saldo</th></tr></thead>
+            <tbody>
+                @foreach (var c in cuentasPorPagar)
+                {
+                    <tr class="table-danger">
+                        <td>@c.Folio</td>
+                        <td>@c.Proveedor</td>
+                        <td>@c.Fecha.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                        <td>@c.Vence.ToString("dd/MM/yyyy")</td>
+                        <td>@c.Saldo.ToString("C")</td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+        @if (cuentasPorPagar.Count == 0)
+        {
+            <p class="text-muted">Sin cuentas por pagar vencidas.</p>
+        }
+    </CandadoGate>
+}
+else if (tabActiva == "Cortes de caja")
+{
+    @if (ConDiferencia > 0)
+    {
+        <p class="text-warning">@ConDiferencia corte(s) con diferencia entre lo esperado y lo contado.</p>
+    }
+    else if (turnosCerrados.Count > 0)
+    {
+        <p class="text-success">Todos los cortes cuadran exacto.</p>
+    }
+    <table class="table table-sm table-striped">
+        <thead><tr><th>Cajero</th><th>Apertura</th><th>Cierre</th><th>Inicial</th><th>Esperado</th><th>Contado</th><th>Diferencia</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var t in turnosCerrados)
+            {
+                <tr class="@(t.Diferencia != 0 ? "table-warning" : "")">
+                    <td>@t.CajeroEmpleado.Nombre</td>
+                    <td>@t.AbiertoUtc.ToLocalTime().ToString("dd/MM HH:mm")</td>
+                    <td>@t.CerradoUtc!.Value.ToLocalTime().ToString("dd/MM HH:mm")</td>
+                    <td>@t.MontoInicial.ToString("C")</td>
+                    <td>@t.MontoEsperado!.Value.ToString("C")</td>
+                    <td>@t.MontoContado!.Value.ToString("C")</td>
+                    <td>@t.Diferencia!.Value.ToString("C")</td>
+                    <td><button class="btn btn-sm btn-outline-secondary" @onclick="() => DescargarCortePdf(t.Id)">PDF</button></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+else if (tabActiva == "Kardex")
+{
+    <div class="row g-2 mb-3">
+        <div class="col-md-4">
+            <select class="form-select" @bind="kardexProductoId">
+                <option value="">Selecciona producto…</option>
+                @foreach (var p in productos)
+                {
+                    <option value="@p.Id">@p.Nombre</option>
+                }
+            </select>
+        </div>
+    </div>
+
+    @if (kardexProductoId is null)
+    {
+        <p class="text-muted">Selecciona un producto para ver su historial de movimientos con saldo acumulado.</p>
+    }
+    else
+    {
+        <KardexPanel ProductoId="kardexProductoId.Value" />
+    }
+}
+
+@code {
+    // Cada pestaña jala de un endpoint con su propio rol -- ver ReportesController. Igual que en
+    // Home.razor, cada llamada se condiciona al rol real de quien entra, para no repetir los dos
+    // bugs de antes (llamar un endpoint más restringido que la página que lo aloja).
+    private bool PuedeVentas => AppSession.HasRole("Ventas") || AppSession.HasRole("Facturacion") || AppSession.HasRole("CuentasPorCobrar");
+    private bool PuedeAlmacen => AppSession.HasRole("Almacen") || AppSession.HasRole("Ventas") || AppSession.HasRole("Compras");
+    private bool PuedeCompras => AppSession.HasRole("Compras") || AppSession.HasRole("CuentasPorPagar");
+
+    private IEnumerable<string> tabs
+    {
+        get
+        {
+            if (PuedeAlmacen)
+            {
+                yield return "Existencias";
+            }
+            if (PuedeVentas)
+            {
+                yield return "Ventas por cliente/producto";
+                yield return "Utilidad";
+                yield return "Cartera vencida";
+            }
+            if (PuedeCompras)
+            {
+                yield return "Cuentas por pagar";
+            }
+            if (AppSession.IsAdmin)
+            {
+                yield return "Cortes de caja";
+            }
+            if (PuedeAlmacen)
+            {
+                yield return "Kardex";
+            }
+        }
+    }
+
+    private string tabActiva = "";
+
+    private List<ExistenciaReporte> existencias = [];
+    private List<VentaPorClienteReporte> ventasPorCliente = [];
+    private List<VentaPorProductoReporte> ventasPorProducto = [];
+    private List<UtilidadReporte> utilidad = [];
+    private List<CarteraVencidaReporte> carteraVencida = [];
+    private List<CuentasPorPagarReporte> cuentasPorPagar = [];
+    private List<ERP.Models.TurnoCaja> turnosCerrados = [];
+    private List<ERP.Models.Producto> productos = [];
+    private int? kardexProductoId;
+
+    private int ConDiferencia => turnosCerrados.Count(t => t.Diferencia != 0);
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (PuedeAlmacen)
+        {
+            existencias = await Api.GetExistenciasAsync();
+        }
+        if (PuedeVentas)
+        {
+            ventasPorCliente = await Api.GetVentasPorClienteAsync();
+            ventasPorProducto = await Api.GetVentasPorProductoAsync();
+            utilidad = await Api.GetUtilidadAsync();
+            carteraVencida = await Api.GetCarteraVencidaAsync();
+        }
+        if (PuedeCompras)
+        {
+            cuentasPorPagar = await Api.GetCuentasPorPagarAsync();
+        }
+        if (AppSession.IsAdmin)
+        {
+            turnosCerrados = await Api.GetCortesCajaAsync();
+        }
+        productos = (await Api.GetProductosAsync()).OrderBy(p => p.Nombre).ToList();
+
+        tabActiva = tabs.FirstOrDefault() ?? "";
+    }
+
+    private async Task DescargarCortePdf(int turnoId)
+    {
+        try
+        {
+            var bytes = await Api.GetTurnoCajaPdfAsync(turnoId);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"corte-caja-{turnoId}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Corte de caja", new ReadOnlyFile(ruta)));
+        }
+        catch
+        {
+            // Silencioso -- esta pestaña no tiene un área de mensaje propia; si falla, el usuario puede reintentar.
+        }
+    }
+}

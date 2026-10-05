@@ -1,0 +1,112 @@
+@page "/catalogos/almacenes"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<PageTitle>Almacenes</PageTitle>
+
+<h1>Almacenes</h1>
+<p class="text-muted">Si nunca das de alta ninguno, todo el sistema opera con un almacén único llamado "Principal" — no es obligatorio usar varios.</p>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para administrar este catálogo.</div>
+}
+else
+{
+    <div class="row g-2 mb-3">
+        <div class="col-auto">
+            <input class="form-control" placeholder="Nombre del almacén" @bind="nombreNuevo" @bind:event="oninput" style="min-width: 260px;" />
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" @onclick="Agregar" disabled="@(guardando || string.IsNullOrWhiteSpace(nombreNuevo))">
+                @(guardando ? "Agregando…" : "Agregar")
+            </button>
+        </div>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="alert alert-danger py-1">@mensaje</div>
+    }
+
+    @if (almacenes is null)
+    {
+        <p><em>Cargando…</em></p>
+    }
+    else if (almacenes.Count == 0)
+    {
+        <p class="text-muted">Todavía no hay almacenes adicionales — se usa "Principal" automáticamente.</p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped align-middle">
+            <thead><tr><th>Nombre</th><th>Estatus</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var a in almacenes)
+                {
+                    <tr>
+                        <td>@a.Nombre</td>
+                        <td>@(a.Activo ? "Activo" : "Inactivo")</td>
+                        <td>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => AlternarActivo(a)">
+                                @(a.Activo ? "Desactivar" : "Reactivar")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<Almacen>? almacenes;
+    private string? nombreNuevo;
+    private string? mensaje;
+    private bool guardando;
+
+    protected override async Task OnInitializedAsync() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        almacenes = await Api.GetAlmacenesAsync();
+    }
+
+    private async Task Agregar()
+    {
+        if (string.IsNullOrWhiteSpace(nombreNuevo))
+        {
+            return;
+        }
+
+        guardando = true;
+        try
+        {
+            await Api.CrearAlmacenAsync(new AlmacenRequest(nombreNuevo.Trim()));
+            nombreNuevo = string.Empty;
+            mensaje = null;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo agregar: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task AlternarActivo(Almacen almacen)
+    {
+        try
+        {
+            await Api.AlternarActivoAlmacenAsync(almacen.Id);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo actualizar el estatus: {ex.Message}";
+        }
+    }
+}

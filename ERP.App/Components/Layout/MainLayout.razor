@@ -1,0 +1,123 @@
+@inherits LayoutComponentBase
+@using ERP.App.Services
+@implements IDisposable
+@inject AppSessionService AppSession
+@inject NavigationManager Nav
+
+@if (!isReady)
+{
+    <div class="p-4"><em>Cargando…</em></div>
+}
+else if (!AppSession.IsAuthenticated)
+{
+    <LoginView />
+}
+else
+{
+    <div class="page">
+        <div class="sidebar">
+            <NavMenu />
+        </div>
+
+        <main>
+            <div class="top-row px-4" style="display: flex; justify-content: flex-end; align-items: center; gap: 0.5rem;">
+                @foreach (var rol in AppSession.CurrentRoles)
+                {
+                    <span class="badge text-bg-secondary">@rol</span>
+                }
+                <span class="badge text-bg-success">@AppSession.CurrentUsername</span>
+                <button class="btn btn-sm btn-outline-danger" @onclick="Salir">Cerrar sesión</button>
+            </div>
+
+            <article class="content px-4">
+                @if (!TieneAcceso())
+                {
+                    <div class="alert alert-warning mt-3">No tienes acceso a esta sección con tus módulos actuales (@string.Join(", ", AppSession.CurrentRoles)).</div>
+                }
+                else
+                {
+                    <ErrorBoundary @ref="errorBoundary">
+                        <ChildContent>
+                            @Body
+                        </ChildContent>
+                        <ErrorContent>
+                            <div class="alert alert-danger mt-3">
+                                <p class="mb-2">Algo salió mal en esta pantalla. Puede ser que se haya perdido la conexión con el servidor.</p>
+                                <button class="btn btn-sm btn-outline-danger" @onclick="Recuperar">Reintentar</button>
+                            </div>
+                        </ErrorContent>
+                    </ErrorBoundary>
+                }
+            </article>
+        </main>
+    </div>
+}
+
+@code {
+    private bool isReady;
+    private ErrorBoundary? errorBoundary;
+
+    // Un solo lugar centraliza qué ruta puede ver cada rol -- evita repetir el chequeo en cada
+    // una de las ~19 páginas. El backend ya rechaza con 403 si alguien se salta esto llamando la
+    // API directo; esto es solo para que la UI no muestre pantallas rotas.
+    private static readonly (string Prefijo, string[] Roles)[] ReglasAcceso =
+    [
+        ("/mostrador", ["Cajero"]),
+        ("/ventas", ["Ventas", "CuentasPorCobrar"]),
+        ("/compras", ["Compras", "CuentasPorPagar"]),
+        ("/traspasos", ["Almacen"]),
+        ("/facturas", ["Facturacion"]),
+        ("/notas-credito", ["Facturacion"]),
+        ("/catalogos/clientes", ["Ventas", "Facturacion"]),
+        ("/catalogos/proveedores", ["Compras"]),
+        ("/catalogos/empleados", []),
+        ("/catalogos/almacenes", ["Almacen"]),
+        ("/catalogos/productos", ["Almacen", "Ventas", "Compras"]),
+        ("/reportes", ["Almacen", "Ventas", "Compras", "Facturacion", "CuentasPorCobrar", "CuentasPorPagar"]),
+        ("/bitacora", []),
+        ("/administracion", []),
+    ];
+
+    private void Recuperar() => errorBoundary?.Recover();
+
+    protected override async Task OnInitializedAsync()
+    {
+        AppSession.AuthStateChanged += OnAuthChanged;
+        Nav.LocationChanged += OnLocationChanged;
+        await AppSession.TryRestoreAsync();
+        isReady = true;
+    }
+
+    private void OnAuthChanged() => InvokeAsync(StateHasChanged);
+    private void OnLocationChanged(object? sender, Microsoft.AspNetCore.Components.Routing.LocationChangedEventArgs e) =>
+        InvokeAsync(StateHasChanged);
+
+    private bool TieneAcceso()
+    {
+        if (AppSession.IsAdmin)
+        {
+            return true;
+        }
+
+        var path = "/" + new Uri(Nav.Uri).AbsolutePath.Trim('/').ToLowerInvariant();
+        var regla = ReglasAcceso.FirstOrDefault(r => path.StartsWith(r.Prefijo, StringComparison.OrdinalIgnoreCase));
+        if (regla.Roles is null)
+        {
+            return true; // ninguna regla aplica a esta ruta (ej. "/") -- abierta a cualquiera
+        }
+        if (regla.Roles.Length == 0)
+        {
+            return false; // regla explícita de "solo Admin" -- ya se sabe que no lo es
+        }
+        return regla.Roles.Any(AppSession.HasRole);
+    }
+
+    private void Salir() => AppSession.Logout();
+
+    public void Dispose()
+    {
+        AppSession.AuthStateChanged -= OnAuthChanged;
+        Nav.LocationChanged -= OnLocationChanged;
+        GC.SuppressFinalize(this);
+    }
+}

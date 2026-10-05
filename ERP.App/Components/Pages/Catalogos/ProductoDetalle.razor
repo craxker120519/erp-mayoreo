@@ -1,0 +1,157 @@
+@page "/catalogos/productos/{Id:int}"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+@inject ServerSettingsService ServerSettings
+
+<PageTitle>@(producto?.Nombre ?? "Producto")</PageTitle>
+
+@if (producto is null)
+{
+    <p><em>Cargando…</em></p>
+}
+else
+{
+    <div class="d-flex justify-content-between align-items-start mb-3">
+        <div>
+            <h1 class="mb-0">
+                @producto.Nombre
+                @if (!string.IsNullOrWhiteSpace(producto.Codigo))
+                {
+                    <span class="text-muted fs-5">(@producto.Codigo)</span>
+                }
+            </h1>
+            <div class="d-flex gap-2 mt-1">
+                <span class="badge @(producto.Activo ? "text-bg-success" : "text-bg-secondary")">@(producto.Activo ? "Activo" : "Inactivo")</span>
+                @if (!string.IsNullOrWhiteSpace(producto.Categoria))
+                {
+                    <span class="badge text-bg-light border">@producto.Categoria</span>
+                }
+                @if (producto.EsPeligroso)
+                {
+                    <span class="badge text-bg-danger">Material peligroso</span>
+                }
+                @if (existenciaTotal < producto.StockMinimo)
+                {
+                    <span class="badge text-bg-warning">Bajo stock mínimo</span>
+                }
+            </div>
+        </div>
+        <a class="btn btn-outline-secondary" href="/catalogos/productos">← Volver al catálogo</a>
+    </div>
+
+    <div class="row g-3 mb-4">
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Precio de venta</div>
+                    <div class="fs-4">@producto.Precio.ToString("C")</div>
+                    <div class="text-muted small">por @producto.UnidadVenta</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small" title="Se recalcula solo (promedio ponderado) cada vez que entra mercancía por una compra">Costo promedio</div>
+                    <div class="fs-4">@producto.Costo.ToString("C")</div>
+                    <div class="@(Margen < 0 ? "text-danger" : "text-muted") small">Margen: @Margen.ToString("P0")</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Existencia total</div>
+                    <div class="fs-4 @(existenciaTotal < producto.StockMinimo ? "text-danger" : "")">@existenciaTotal @producto.UnidadVenta</div>
+                    <div class="text-muted small">Mínimo: @producto.StockMinimo @producto.UnidadVenta</div>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="card h-100">
+                <div class="card-body">
+                    <div class="text-muted small">Valor en inventario</div>
+                    <div class="fs-4">@((existenciaTotal * producto.Costo).ToString("C"))</div>
+                    <div class="text-muted small">a costo promedio</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row g-3">
+        <div class="col-md-5">
+            <div class="card mb-3">
+                <div class="card-header">Datos generales</div>
+                <div class="card-body">
+                    <dl class="row mb-0">
+                        <dt class="col-5">Unidad de compra</dt><dd class="col-7">@producto.UnidadCompra</dd>
+                        <dt class="col-5">Unidad de venta</dt><dd class="col-7">@producto.UnidadVenta</dd>
+                        <dt class="col-5">Factor de conversión</dt><dd class="col-7">@producto.FactorConversion</dd>
+                        <dt class="col-5">Hoja de seguridad</dt>
+                        <dd class="col-7">
+                            @if (!string.IsNullOrWhiteSpace(producto.HojaSeguridadRuta))
+                            {
+                                <a href="@($"{ServerSettings.BaseUrl}/storage/{producto.HojaSeguridadRuta}")" target="_blank">@producto.HojaSeguridadNombreOriginal</a>
+                            }
+                            else
+                            {
+                                <span class="text-muted">No adjunta</span>
+                            }
+                        </dd>
+                    </dl>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">Existencia por almacén</div>
+                <div class="card-body p-0">
+                    @if (existencias.Count == 0)
+                    {
+                        <p class="text-muted p-3 mb-0">Sin existencia registrada en ningún almacén.</p>
+                    }
+                    else
+                    {
+                        <table class="table table-sm mb-0">
+                            <thead><tr><th>Almacén</th><th class="text-end">Existencia</th></tr></thead>
+                            <tbody>
+                                @foreach (var e in existencias)
+                                {
+                                    <tr class="@(e.Cantidad < 0 ? "table-danger" : "")">
+                                        <td>@e.Almacen</td>
+                                        <td class="text-end">@e.Cantidad @e.UnidadVenta</td>
+                                    </tr>
+                                }
+                            </tbody>
+                        </table>
+                    }
+                </div>
+            </div>
+        </div>
+
+        <div class="col-md-7">
+            <div class="card">
+                <div class="card-header">Kardex — historial de movimientos</div>
+                <div class="card-body">
+                    <KardexPanel ProductoId="Id" />
+                </div>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private Producto? producto;
+    private List<ExistenciaReporte> existencias = [];
+
+    private decimal existenciaTotal => existencias.Sum(e => e.Cantidad);
+    private decimal Margen => producto is null || producto.Precio <= 0 ? 0 : (producto.Precio - producto.Costo) / producto.Precio;
+
+    protected override async Task OnInitializedAsync()
+    {
+        producto = await Api.GetProductoAsync(Id);
+        existencias = await Api.GetExistenciasProductoAsync(Id);
+    }
+}

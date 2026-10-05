@@ -1,0 +1,161 @@
+@page "/ventas/nuevo"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>Nueva cotización</PageTitle>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para crear cotizaciones.</div>
+}
+else
+{
+    <h1>Nueva cotización</h1>
+
+    <div class="row g-2 mb-3">
+        <div class="col-md-4">
+            <select class="form-select" @bind="clienteId">
+                <option value="">Selecciona cliente…</option>
+                @foreach (var c in clientes)
+                {
+                    <option value="@c.Id">@c.Nombre @(c.Tipo == TipoCliente.Mayoreo ? "" : "(Público)")</option>
+                }
+            </select>
+        </div>
+        @if (almacenes.Count > 1)
+        {
+            <div class="col-md-3">
+                <select class="form-select" @bind="almacenId">
+                    <option value="">Almacén (Principal)</option>
+                    @foreach (var a in almacenes)
+                    {
+                        <option value="@a.Id">@a.Nombre</option>
+                    }
+                </select>
+            </div>
+        }
+        <div class="col-md-5">
+            <input class="form-control" placeholder="Nota (opcional)" @bind="nota" />
+        </div>
+    </div>
+
+    <div class="card mb-3">
+        <div class="card-body">
+            <div class="row g-2">
+                <div class="col-5">
+                    <select class="form-select" @bind="productoSeleccionadoId">
+                        <option value="">Selecciona producto…</option>
+                        @foreach (var p in productos)
+                        {
+                            <option value="@p.Id">@p.Nombre — @p.Precio.ToString("C")/@p.UnidadVenta</option>
+                        }
+                    </select>
+                </div>
+                <div class="col-3">
+                    <input type="number" min="0.01" step="0.01" class="form-control" @bind="cantidadAgregar" placeholder="Cantidad" />
+                </div>
+                <div class="col-4">
+                    <button class="btn btn-outline-primary w-100" @onclick="AgregarAlCarrito" disabled="@(productoSeleccionadoId is null)">Agregar</button>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <table class="table table-sm">
+        <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio</th><th>Importe</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var item in carrito)
+            {
+                <tr>
+                    <td>@item.Producto.Nombre</td>
+                    <td>@item.Cantidad @item.Producto.UnidadVenta</td>
+                    <td>@item.Producto.Precio.ToString("C")</td>
+                    <td>@((item.Cantidad * item.Producto.Precio).ToString("C"))</td>
+                    <td><button class="btn btn-sm btn-outline-danger" @onclick="() => carrito.Remove(item)">×</button></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+
+    <div class="d-flex justify-content-between align-items-center">
+        <h4>Total: @Total.ToString("C")</h4>
+        <button class="btn btn-success" @onclick="Guardar" disabled="@(guardando || clienteId is null || carrito.Count == 0)">
+            @(guardando ? "Guardando…" : "Guardar cotización")
+        </button>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="alert alert-danger mt-2">@mensaje</div>
+    }
+}
+
+@code {
+    private List<Cliente> clientes = [];
+    private List<Producto> productos = [];
+    private List<Almacen> almacenes = [];
+    private int? clienteId;
+    private int? almacenId;
+    private string? nota;
+
+    private int? productoSeleccionadoId;
+    private decimal cantidadAgregar = 1;
+    private readonly List<(Producto Producto, decimal Cantidad)> carrito = [];
+    private string? mensaje;
+    private bool guardando;
+
+    private decimal Total => carrito.Sum(i => i.Cantidad * i.Producto.Precio);
+
+    protected override async Task OnInitializedAsync()
+    {
+        clientes = (await Api.GetClientesAsync()).Where(c => c.Activo).OrderBy(c => c.Nombre).ToList();
+        productos = (await Api.GetProductosAsync()).Where(p => p.Activo).OrderBy(p => p.Nombre).ToList();
+        almacenes = (await Api.GetAlmacenesAsync()).Where(a => a.Activo).OrderBy(a => a.Nombre).ToList();
+    }
+
+    private void AgregarAlCarrito()
+    {
+        if (productoSeleccionadoId is not int id || cantidadAgregar <= 0)
+        {
+            return;
+        }
+
+        var producto = productos.First(p => p.Id == id);
+        var indice = carrito.FindIndex(i => i.Producto.Id == id);
+        if (indice >= 0)
+        {
+            carrito[indice] = (producto, carrito[indice].Cantidad + cantidadAgregar);
+        }
+        else
+        {
+            carrito.Add((producto, cantidadAgregar));
+        }
+
+        productoSeleccionadoId = null;
+        cantidadAgregar = 1;
+    }
+
+    private async Task Guardar()
+    {
+        if (clienteId is not int cId || carrito.Count == 0)
+        {
+            mensaje = "Selecciona cliente y agrega al menos un producto.";
+            return;
+        }
+
+        guardando = true;
+        try
+        {
+            var request = new CrearPedidoVentaRequest(
+                cId, almacenId, nota, carrito.Select(i => new ItemRequest(i.Producto.Id, i.Cantidad)).ToList());
+            var pedido = await Api.CrearPedidoVentaAsync(request);
+            Navigation.NavigateTo($"/ventas/{pedido.Id}");
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar la cotización: {ex.Message}";
+            guardando = false;
+        }
+    }
+}

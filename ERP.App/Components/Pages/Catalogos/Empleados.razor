@@ -1,0 +1,166 @@
+@page "/catalogos/empleados"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<PageTitle>Empleados</PageTitle>
+
+<h1>Empleados</h1>
+<p class="text-muted">Catálogo ligero para autocompletar "quién" — por ejemplo el cajero que abre un turno. No implica login individual.</p>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para administrar este catálogo.</div>
+}
+else
+{
+    <div class="row g-2 mb-3">
+        <div class="col-auto">
+            <input class="form-control" placeholder="Nombre" @bind="nombreNuevo" @bind:event="oninput" style="min-width: 260px;" />
+        </div>
+        <div class="col-auto">
+            <button class="btn btn-primary" @onclick="Agregar" disabled="@(guardando || string.IsNullOrWhiteSpace(nombreNuevo))">
+                @(guardando ? "Agregando…" : "Agregar")
+            </button>
+        </div>
+    </div>
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="alert alert-danger py-1">@mensaje</div>
+    }
+
+    @if (empleados is null)
+    {
+        <p><em>Cargando…</em></p>
+    }
+    else if (empleados.Count == 0)
+    {
+        <p class="text-muted">Todavía no hay empleados registrados.</p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped align-middle">
+            <thead><tr><th>Nombre</th><th>Estatus</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var e in empleados)
+                {
+                    <tr>
+                        @if (editandoId == e.Id)
+                        {
+                            <td>
+                                <input class="form-control form-control-sm" @bind="nombreEdicion" @bind:event="oninput" />
+                            </td>
+                            <td>@(e.Activo ? "Activo" : "Inactivo")</td>
+                            <td class="d-flex gap-1">
+                                <button class="btn btn-sm btn-primary" @onclick="() => GuardarEdicion(e)" disabled="@(guardando || string.IsNullOrWhiteSpace(nombreEdicion))">Guardar</button>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="CancelarEdicion">Cancelar</button>
+                            </td>
+                        }
+                        else
+                        {
+                            <td>@e.Nombre</td>
+                            <td>@(e.Activo ? "Activo" : "Inactivo")</td>
+                            <td class="d-flex gap-1">
+                                <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(e)">Editar</button>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => AlternarActivo(e)">
+                                    @(e.Activo ? "Desactivar" : "Reactivar")
+                                </button>
+                            </td>
+                        }
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<Empleado>? empleados;
+    private string? nombreNuevo;
+    private string? mensaje;
+    private int? editandoId;
+    private string nombreEdicion = string.Empty;
+    private bool guardando;
+
+    protected override async Task OnInitializedAsync() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        empleados = await Api.GetEmpleadosAsync();
+    }
+
+    private async Task Agregar()
+    {
+        if (string.IsNullOrWhiteSpace(nombreNuevo))
+        {
+            return;
+        }
+
+        guardando = true;
+        try
+        {
+            await Api.CrearEmpleadoAsync(new EmpleadoRequest(nombreNuevo.Trim()));
+            nombreNuevo = string.Empty;
+            mensaje = null;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo agregar: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private void Editar(Empleado empleado)
+    {
+        editandoId = empleado.Id;
+        nombreEdicion = empleado.Nombre;
+        mensaje = null;
+    }
+
+    private void CancelarEdicion()
+    {
+        editandoId = null;
+        nombreEdicion = string.Empty;
+    }
+
+    private async Task GuardarEdicion(Empleado empleado)
+    {
+        if (string.IsNullOrWhiteSpace(nombreEdicion))
+        {
+            return;
+        }
+
+        guardando = true;
+        try
+        {
+            await Api.ActualizarEmpleadoAsync(empleado.Id, new EmpleadoRequest(nombreEdicion.Trim()));
+            CancelarEdicion();
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task AlternarActivo(Empleado empleado)
+    {
+        try
+        {
+            await Api.AlternarActivoEmpleadoAsync(empleado.Id);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo actualizar el estatus: {ex.Message}";
+        }
+    }
+}

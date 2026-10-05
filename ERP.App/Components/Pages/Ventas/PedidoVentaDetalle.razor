@@ -1,0 +1,783 @@
+@page "/ventas/{Id:int}"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+@inject NavigationManager Navigation
+
+<PageTitle>Pedido de venta</PageTitle>
+
+@if (pedido is null)
+{
+    <p><em>Cargando…</em></p>
+}
+else
+{
+    <h1>@pedido.Folio <span class="badge @EstatusBadge(pedido.Estatus)">@TipoDocumentoTexto(pedido.Estatus)</span></h1>
+    <p>Cliente: <strong>@pedido.Cliente.Nombre</strong> — @pedido.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</p>
+    @if (!string.IsNullOrWhiteSpace(pedido.Nota))
+    {
+        <p class="text-muted">@pedido.Nota</p>
+    }
+
+    @* Cotización, Pedido y Remisión son documentos SEPARADOS con folio propio, encadenados por
+       DocumentoOrigenId/DocumentosGenerados -- cada badge navega al documento de esa etapa (que se
+       conserva intacto tal como quedó, aunque la venta haya avanzado), no descarga nada. Factura y
+       notas de crédito siguen siendo folios propios con su propio PDF. *@
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-3 small">
+        @foreach (var (nodo, esActual) in CadenaConMarcaActual())
+        {
+            @if (esActual)
+            {
+                <span @key="nodo.Id" class="badge @EstatusBadge(nodo.Estatus)" title="Estás viendo este documento">
+                    @TipoDocumentoTexto(nodo.Estatus) @nodo.Folio — @nodo.FechaUtc.ToLocalTime().ToString("dd/MM/yy") (aquí)
+                </span>
+            }
+            else
+            {
+                <a @key="nodo.Id" class="badge @EstatusBadge(nodo.Estatus) text-decoration-none" href="/ventas/@nodo.Id" title="Ir a este documento">
+                    @TipoDocumentoTexto(nodo.Estatus) @nodo.Folio — @nodo.FechaUtc.ToLocalTime().ToString("dd/MM/yy")
+                </a>
+            }
+            <span class="text-muted">→</span>
+        }
+        @if (pedido.Estatus == EstatusPedidoVenta.Pedido && (pedido.DocumentosGenerados?.Count ?? 0) == 0)
+        {
+            <span class="badge text-bg-light text-muted border">Remisión (pendiente)</span>
+        }
+        @if (FacturaVigente is not null)
+        {
+            <span class="badge text-bg-primary" style="cursor:pointer" title="Descargar PDF de la factura" @onclick="() => DescargarFacturaPdf(FacturaVigente.Id)">Factura @FacturaVigente.Folio — @FacturaVigente.FechaEmisionUtc.ToLocalTime().ToString("dd/MM/yy")</span>
+            <span class="text-muted">→</span>
+        }
+        @foreach (var nota in pedido.NotasCredito.Where(n => n.Estatus != EstatusNotaCredito.Cancelada))
+        {
+            <span class="badge text-bg-info" style="cursor:pointer" title="Descargar PDF de la nota de crédito" @onclick="() => DescargarNotaPdf(nota.Id)">Nota @nota.Folio — @nota.FechaUtc.ToLocalTime().ToString("dd/MM/yy")</span>
+        }
+    </div>
+
+    @if (EsHistorial)
+    {
+        <div class="alert alert-secondary py-2 small">
+            Este documento ya avanzó a la siguiente etapa -- se conserva tal como quedó, ya no se puede editar ni cancelar desde aquí.
+        </div>
+    }
+
+    @if (!editandoItems)
+    {
+        <table class="table table-sm">
+            <thead><tr><th>Producto</th><th>Cantidad</th><th>Precio</th><th>Importe</th></tr></thead>
+            <tbody>
+                @foreach (var item in pedido.Items)
+                {
+                    <tr>
+                        <td>@item.Producto.Nombre</td>
+                        <td>@item.Cantidad @item.Producto.UnidadVenta</td>
+                        <td>@item.PrecioUnitario.ToString("C")</td>
+                        <td>@item.Importe.ToString("C")</td>
+                    </tr>
+                }
+            </tbody>
+            <tfoot><tr><th colspan="3" class="text-end">Total</th><th>@pedido.Total.ToString("C")</th></tr></tfoot>
+        </table>
+    }
+    else
+    {
+        <div class="card mb-3" style="max-width: 700px;">
+            <div class="card-body">
+                <h6 class="card-title">Editar partidas</h6>
+                <div class="row g-2 mb-2">
+                    <div class="col-5">
+                        <select class="form-select form-select-sm" @bind="productoEditarId">
+                            <option value="">Selecciona producto…</option>
+                            @foreach (var p in productos)
+                            {
+                                <option value="@p.Id">@p.Nombre — @p.Precio.ToString("C")/@p.UnidadVenta</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-3">
+                        <input type="number" min="0.01" step="0.01" class="form-control form-control-sm" @bind="cantidadEditar" placeholder="Cantidad" />
+                    </div>
+                    <div class="col-4">
+                        <button class="btn btn-outline-primary btn-sm w-100" @onclick="AgregarItemEditar" disabled="@(productoEditarId is null)">Agregar</button>
+                    </div>
+                </div>
+
+                <table class="table table-sm mb-2">
+                    <thead><tr><th>Producto</th><th>Cantidad</th><th>Importe</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var item in carritoEditar)
+                        {
+                            <tr>
+                                <td>@item.Producto.Nombre</td>
+                                <td>@item.Cantidad @item.Producto.UnidadVenta</td>
+                                <td>@((item.Cantidad * item.Producto.Precio).ToString("C"))</td>
+                                <td><button class="btn btn-sm btn-outline-danger" @onclick="() => carritoEditar.Remove(item)">×</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary btn-sm" @onclick="GuardarItemsEditar" disabled="@(procesandoEstatus || carritoEditar.Count == 0)">
+                        @(procesandoEstatus ? "Guardando…" : "Guardar cambios")
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="() => editandoItems = false">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (IsAuthenticated)
+    {
+        <div class="d-flex gap-2 mb-4">
+            @if (AppSession.HasRole("Ventas") && !EsHistorial)
+            {
+                @if (pedido.Estatus == EstatusPedidoVenta.Cotizacion)
+                {
+                    <button class="btn btn-warning" @onclick="ConvertirAPedido" disabled="@procesandoEstatus">
+                        @(procesandoEstatus ? "Convirtiendo…" : "Convertir a pedido")
+                    </button>
+                }
+                @if (pedido.Estatus == EstatusPedidoVenta.Pedido)
+                {
+                    <button class="btn btn-success" @onclick="Remisionar" disabled="@procesandoEstatus">
+                        @(procesandoEstatus ? "Remisionando…" : "Remisionar (descuenta inventario)")
+                    </button>
+                }
+                @if (!editandoItems && pedido.Estatus is EstatusPedidoVenta.Cotizacion or EstatusPedidoVenta.Pedido)
+                {
+                    <button class="btn btn-outline-primary" @onclick="IniciarEdicionItems">Editar partidas</button>
+                    <button class="btn btn-outline-danger" @onclick="Cancelar" disabled="@procesandoEstatus">Cancelar</button>
+                }
+            }
+            <button class="btn btn-outline-secondary" @onclick="DescargarPedidoPdf">Descargar PDF</button>
+        </div>
+
+        @if (pedido.Estatus == EstatusPedidoVenta.Remisionado)
+        {
+        <CandadoGate Nombre="Cuentas">
+        <h5>Cuenta por cobrar</h5>
+        <p>Saldo pendiente: <strong class="@(saldo > 0 ? "text-danger" : "text-success")">@saldo.ToString("C")</strong></p>
+
+        @if (saldo > 0 && (AppSession.HasRole("Ventas") || AppSession.HasRole("CuentasPorCobrar")))
+        {
+            <div class="row g-2 mb-3" style="max-width: 500px;">
+                <div class="col-6">
+                    <input type="number" min="0.01" step="0.01" max="@saldo" class="form-control" @bind="montoPago" placeholder="Monto" />
+                </div>
+                <div class="col-4">
+                    <input class="form-control" @bind="metodoPago" placeholder="Método (efectivo, transferencia…)" />
+                </div>
+                <div class="col-2">
+                    <button class="btn btn-primary w-100" @onclick="RegistrarPago" disabled="@procesandoPago">
+                        @(procesandoPago ? "…" : "Pagar")
+                    </button>
+                </div>
+            </div>
+        }
+
+        @if (pedido.Pagos.Count > 0)
+        {
+            <table class="table table-sm">
+                <thead><tr><th>Fecha</th><th>Monto</th><th>Método</th></tr></thead>
+                <tbody>
+                    @foreach (var pago in pedido.Pagos.OrderBy(p => p.FechaUtc))
+                    {
+                        <tr><td>@pago.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td>@pago.Monto.ToString("C")</td><td>@pago.MetodoPago</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        @if (pedido.CreditoRecibido.Count > 0)
+        {
+            <p class="text-muted small mb-1">Crédito aplicado a este pedido:</p>
+            <table class="table table-sm">
+                <thead><tr><th>Nota</th><th>Fecha</th><th>Monto</th></tr></thead>
+                <tbody>
+                    @foreach (var a in pedido.CreditoRecibido.OrderBy(a => a.FechaUtc))
+                    {
+                        <tr><td>@a.NotaCredito.Folio</td><td>@a.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td>@a.Monto.ToString("C")</td></tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        @if (saldo > 0 && creditoDisponibleCliente.Count > 0 && (AppSession.HasRole("Ventas") || AppSession.HasRole("CuentasPorCobrar")))
+        {
+            <div class="card mb-3" style="max-width: 560px;">
+                <div class="card-body">
+                    <h6 class="card-title">Crédito disponible del cliente</h6>
+                    <p class="text-muted small">Este cliente tiene notas de crédito con saldo a favor -- se pueden usar como pago de este pedido.</p>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <select class="form-select form-select-sm" @bind="notaCreditoAplicarId">
+                                <option value="">Selecciona nota…</option>
+                                @foreach (var n in creditoDisponibleCliente)
+                                {
+                                    <option value="@n.Id">@n.Folio — disponible @n.Disponible.ToString("C")</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-4">
+                            <input type="number" min="0.01" step="0.01" class="form-control form-control-sm" @bind="montoAplicarCredito" placeholder="Monto" />
+                        </div>
+                        <div class="col-2">
+                            <button class="btn btn-primary btn-sm w-100" @onclick="AplicarCredito" disabled="@(procesandoCredito || notaCreditoAplicarId is null)">
+                                @(procesandoCredito ? "…" : "Aplicar")
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        }
+        </CandadoGate>
+
+        @if (AppSession.HasRole("Facturacion"))
+        {
+        <CandadoGate Nombre="Facturacion">
+        <h5 class="mt-4">Facturación</h5>
+        @if (FacturaVigente is not null)
+        {
+            <p>
+                <span class="badge text-bg-secondary">@FacturaVigente.Folio</span>
+                @FacturaVigente.Total.ToString("C") —
+                <span class="text-danger">no válida para efectos fiscales todavía</span>
+            </p>
+            <div class="d-flex gap-2">
+                <button class="btn btn-outline-primary btn-sm" @onclick="() => DescargarFacturaPdf(FacturaVigente.Id)">Descargar PDF</button>
+                <button class="btn btn-outline-danger btn-sm" @onclick="() => CancelarFactura(FacturaVigente.Id)">Cancelar factura</button>
+            </div>
+        }
+        else
+        {
+            <p class="text-muted small">Genera un comprobante interno con IVA (16%) — todavía no es un CFDI válido ante el SAT.</p>
+            <button class="btn btn-primary btn-sm" @onclick="GenerarFactura" disabled="@generandoFactura">
+                @(generandoFactura ? "Generando…" : "Generar factura")
+            </button>
+        }
+
+        <h5 class="mt-4">Notas de crédito</h5>
+        @if (pedido.NotasCredito.Count > 0)
+        {
+            <table class="table table-sm">
+                <thead><tr><th>Folio</th><th>Fecha</th><th>Motivo</th><th>Total</th><th>Disponible</th><th>Estatus</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var n in pedido.NotasCredito.OrderByDescending(x => x.FechaUtc))
+                    {
+                        <tr>
+                            <td>@n.Folio</td>
+                            <td>@n.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                            <td>@n.Motivo</td>
+                            <td>@n.Total.ToString("C")</td>
+                            <td>@n.Disponible.ToString("C")</td>
+                            <td><span class="badge @(n.Estatus == EstatusNotaCredito.Cancelada ? "text-bg-dark" : "text-bg-secondary")">@n.Estatus</span></td>
+                            <td class="d-flex gap-1">
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => DescargarNotaPdf(n.Id)">PDF</button>
+                                @if (n.Estatus != EstatusNotaCredito.Cancelada)
+                                {
+                                    <button class="btn btn-sm btn-outline-danger" @onclick="() => CancelarNota(n.Id)"
+                                            disabled="@(n.Disponible < n.Total)" title="@(n.Disponible < n.Total ? "Ya se aplicó como crédito, no se puede cancelar" : null)">
+                                        Cancelar
+                                    </button>
+                                }
+                            </td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        }
+
+        @if (!mostrarFormNota)
+        {
+            <button class="btn btn-outline-secondary btn-sm" @onclick="() => mostrarFormNota = true">+ Nueva nota de crédito</button>
+        }
+        else
+        {
+            <div class="card" style="max-width: 560px;">
+                <div class="card-body">
+                    <p class="text-muted small">Cantidad a acreditar por producto (deja en 0 lo que no aplique).</p>
+                    @foreach (var item in pedido.Items)
+                    {
+                        var disponible = DisponibleParaAcreditar(item.ProductoId, item.Cantidad);
+                        <div class="row g-2 align-items-center mb-1">
+                            <div class="col-6">@item.Producto.Nombre <span class="text-muted small">(disp. @disponible @item.Producto.UnidadVenta)</span></div>
+                            <div class="col-6">
+                                <input type="number" min="0" max="@disponible" step="0.01" class="form-control form-control-sm"
+                                       value="@CantidadNota(item.ProductoId)"
+                                       @onchange="@(e => EstablecerCantidadNota(item.ProductoId, e.Value))" />
+                            </div>
+                        </div>
+                    }
+                    <div class="row g-2 mt-1">
+                        <div class="col-8">
+                            <input class="form-control form-control-sm" placeholder="Motivo (opcional)" @bind="motivoNota" />
+                        </div>
+                        <div class="col-4 d-flex align-items-center">
+                            <div class="form-check">
+                                <input class="form-check-input" type="checkbox" id="devuelveInv" @bind="devuelveInventario" />
+                                <label class="form-check-label small" for="devuelveInv">Regresa a inventario</label>
+                            </div>
+                        </div>
+                    </div>
+                    <div class="d-flex gap-2 mt-2">
+                        <button class="btn btn-primary btn-sm" @onclick="GenerarNotaCredito" disabled="@generandoNota">
+                            @(generandoNota ? "Generando…" : "Generar nota de crédito")
+                        </button>
+                        <button class="btn btn-outline-secondary btn-sm" @onclick="() => mostrarFormNota = false">Cancelar</button>
+                    </div>
+                </div>
+            </div>
+        }
+        </CandadoGate>
+        }
+        }
+    }
+
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="alert alert-info">@mensaje</div>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private PedidoVenta? pedido;
+    private decimal saldo;
+    private decimal montoPago;
+    private string metodoPago = "Efectivo";
+    private string? mensaje;
+    private bool generandoFactura;
+
+    private bool mostrarFormNota;
+    private string? motivoNota;
+    private bool devuelveInventario = true;
+    private bool generandoNota;
+    private readonly Dictionary<int, decimal> cantidadesNota = [];
+
+    private List<NotaCredito> creditoDisponibleCliente = [];
+    private int? notaCreditoAplicarId;
+    private decimal montoAplicarCredito;
+    private bool procesandoPago;
+    private bool procesandoCredito;
+    private bool procesandoEstatus;
+
+    private List<Producto> productos = [];
+    private bool editandoItems;
+    private int? productoEditarId;
+    private decimal cantidadEditar = 1;
+    private readonly List<(Producto Producto, decimal Cantidad)> carritoEditar = [];
+
+    private Factura? FacturaVigente => pedido?.Facturas.FirstOrDefault(f => f.Estatus != EstatusFactura.Cancelada);
+
+    // Ya avanzó a la siguiente etapa (tiene un documento generado a partir de este) -- se muestra
+    // como historial de solo lectura, ya no acepta editar/cancelar/convertir/remisionar.
+    private bool EsHistorial => (pedido?.DocumentosGenerados?.Count ?? 0) > 0;
+
+    private int? cargadoId;
+
+    protected override async Task OnInitializedAsync()
+    {
+        productos = (await Api.GetProductosAsync()).Where(p => p.Activo).OrderBy(p => p.Nombre).ToList();
+    }
+
+    // Navegar de un nodo de la cadena a otro (o de Convertir/Remisionar al documento nuevo) reusa
+    // la misma instancia del componente -- solo cambia el parámetro Id, OnInitializedAsync no se
+    // vuelve a llamar. Este es el hook que sí corre en cada cambio de Id.
+    protected override async Task OnParametersSetAsync()
+    {
+        if (cargadoId == Id)
+        {
+            return;
+        }
+
+        cargadoId = Id;
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        editandoItems = false;
+        mostrarFormNota = false;
+        mensaje = null;
+        cantidadesNota.Clear();
+
+        pedido = await Api.GetPedidoVentaAsync(Id);
+        saldo = pedido is null
+            ? 0
+            : pedido.Total - pedido.Pagos.Sum(p => p.Monto) - pedido.CreditoRecibido.Sum(a => a.Monto);
+
+        creditoDisponibleCliente = pedido is null
+            ? []
+            : await Api.GetCreditoDisponibleClienteAsync(pedido.ClienteId);
+    }
+
+    // La cadena ya viene aplanada y calculada del lado del servidor (PedidoVenta.Cadena) -- caminar
+    // DocumentoOrigen/DocumentosGenerados del lado del cliente se abandonó porque esas 2
+    // propiedades se referencian mutuamente (un ciclo real) y el serializador JSON podía colar un
+    // `null` dentro de la colección al romperlo, aunque `Count` siguiera siendo mayor a 0.
+    private IEnumerable<(PedidoVentaCadenaItem Nodo, bool EsActual)> CadenaConMarcaActual() =>
+        (pedido?.Cadena ?? []).Select(nodo => (nodo, nodo.Id == pedido!.Id));
+
+    private static string TipoDocumentoTexto(EstatusPedidoVenta estatus) => estatus switch
+    {
+        EstatusPedidoVenta.Cotizacion => "Cotización",
+        EstatusPedidoVenta.Pedido => "Pedido",
+        EstatusPedidoVenta.Remisionado => "Remisión",
+        EstatusPedidoVenta.Cancelado => "Cancelado",
+        _ => estatus.ToString()
+    };
+
+    private async Task ConvertirAPedido()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        procesandoEstatus = true;
+        try
+        {
+            var nuevo = await Api.ConvertirAPedidoAsync(pedido.Id);
+            Navigation.NavigateTo($"/ventas/{nuevo.Id}");
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo convertir a pedido: {ex.Message}";
+            procesandoEstatus = false;
+        }
+    }
+
+    private async Task Cancelar()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        procesandoEstatus = true;
+        try
+        {
+            await Api.CancelarPedidoVentaAsync(pedido.Id);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo cancelar: {ex.Message}";
+        }
+        finally
+        {
+            procesandoEstatus = false;
+        }
+    }
+
+    private async Task Remisionar()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        procesandoEstatus = true;
+        try
+        {
+            var nueva = await Api.RemisionarAsync(pedido.Id);
+            Navigation.NavigateTo($"/ventas/{nueva.Id}");
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo remisionar: {ex.Message}";
+            procesandoEstatus = false;
+        }
+    }
+
+    private async Task RegistrarPago()
+    {
+        if (pedido is null || montoPago <= 0 || montoPago > saldo)
+        {
+            mensaje = "Monto inválido.";
+            return;
+        }
+
+        procesandoPago = true;
+        try
+        {
+            await Api.RegistrarPagoAsync(pedido.Id, new RegistrarPagoRequest(montoPago, metodoPago));
+            montoPago = 0;
+            mensaje = "Pago registrado.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo registrar el pago: {ex.Message}";
+        }
+        finally
+        {
+            procesandoPago = false;
+        }
+    }
+
+    private async Task GenerarFactura()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        generandoFactura = true;
+        try
+        {
+            await Api.CrearFacturaAsync(pedido.Id);
+            mensaje = "Factura generada.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo generar la factura: {ex.Message}";
+        }
+        finally
+        {
+            generandoFactura = false;
+        }
+    }
+
+    private async Task DescargarFacturaPdf(int facturaId)
+    {
+        try
+        {
+            var bytes = await Api.GetFacturaPdfAsync(facturaId);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"factura-{facturaId}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Factura", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+
+    private async Task CancelarFactura(int facturaId)
+    {
+        try
+        {
+            await Api.CancelarFacturaAsync(facturaId);
+            mensaje = "Factura cancelada.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo cancelar la factura: {ex.Message}";
+        }
+    }
+
+    private decimal DisponibleParaAcreditar(int productoId, decimal cantidadOriginal)
+    {
+        var yaAcreditado = (pedido?.NotasCredito ?? [])
+            .Where(n => n.Estatus != EstatusNotaCredito.Cancelada)
+            .SelectMany(n => n.Items)
+            .Where(i => i.ProductoId == productoId)
+            .Sum(i => i.Cantidad);
+
+        return cantidadOriginal - yaAcreditado;
+    }
+
+    private decimal CantidadNota(int productoId) => cantidadesNota.GetValueOrDefault(productoId);
+
+    private void EstablecerCantidadNota(int productoId, object? valor)
+    {
+        if (decimal.TryParse(valor?.ToString(), out var cantidad))
+        {
+            cantidadesNota[productoId] = cantidad;
+        }
+    }
+
+    private async Task GenerarNotaCredito()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        var items = cantidadesNota
+            .Where(kv => kv.Value > 0)
+            .Select(kv => new ItemNotaCreditoRequest(kv.Key, kv.Value))
+            .ToList();
+
+        if (items.Count == 0)
+        {
+            mensaje = "Captura al menos una cantidad a acreditar.";
+            return;
+        }
+
+        generandoNota = true;
+        try
+        {
+            await Api.CrearNotaCreditoAsync(new CrearNotaCreditoRequest(pedido.Id, motivoNota, devuelveInventario, items));
+            mensaje = "Nota de crédito generada.";
+            cantidadesNota.Clear();
+            motivoNota = null;
+            mostrarFormNota = false;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo generar la nota de crédito: {ex.Message}";
+        }
+        finally
+        {
+            generandoNota = false;
+        }
+    }
+
+    private async Task DescargarPedidoPdf()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var bytes = await Api.GetPedidoVentaPdfAsync(pedido.Id);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"{pedido.Folio}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Pedido de venta", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+
+    private async Task DescargarNotaPdf(int notaId)
+    {
+        try
+        {
+            var bytes = await Api.GetNotaCreditoPdfAsync(notaId);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"nota-credito-{notaId}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Nota de crédito", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+
+    private async Task AplicarCredito()
+    {
+        if (pedido is null || notaCreditoAplicarId is not int notaId || montoAplicarCredito <= 0)
+        {
+            mensaje = "Selecciona una nota y un monto válido.";
+            return;
+        }
+
+        procesandoCredito = true;
+        try
+        {
+            await Api.AplicarCreditoAsync(notaId, new AplicarCreditoRequest(pedido.Id, montoAplicarCredito));
+            mensaje = "Crédito aplicado.";
+            notaCreditoAplicarId = null;
+            montoAplicarCredito = 0;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo aplicar el crédito: {ex.Message}";
+        }
+        finally
+        {
+            procesandoCredito = false;
+        }
+    }
+
+    private async Task CancelarNota(int notaId)
+    {
+        try
+        {
+            await Api.CancelarNotaCreditoAsync(notaId);
+            mensaje = "Nota de crédito cancelada.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo cancelar: {ex.Message}";
+        }
+    }
+
+    private void IniciarEdicionItems()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        carritoEditar.Clear();
+        foreach (var item in pedido.Items)
+        {
+            var producto = productos.FirstOrDefault(p => p.Id == item.ProductoId) ?? item.Producto;
+            carritoEditar.Add((producto, item.Cantidad));
+        }
+
+        editandoItems = true;
+    }
+
+    private void AgregarItemEditar()
+    {
+        if (productoEditarId is not int id || cantidadEditar <= 0)
+        {
+            return;
+        }
+
+        var producto = productos.First(p => p.Id == id);
+        var indice = carritoEditar.FindIndex(i => i.Producto.Id == id);
+        if (indice >= 0)
+        {
+            carritoEditar[indice] = (producto, carritoEditar[indice].Cantidad + cantidadEditar);
+        }
+        else
+        {
+            carritoEditar.Add((producto, cantidadEditar));
+        }
+
+        productoEditarId = null;
+        cantidadEditar = 1;
+    }
+
+    private async Task GuardarItemsEditar()
+    {
+        if (pedido is null || carritoEditar.Count == 0)
+        {
+            return;
+        }
+
+        procesandoEstatus = true;
+        try
+        {
+            var items = carritoEditar.Select(i => new ItemRequest(i.Producto.Id, i.Cantidad)).ToList();
+            await Api.ActualizarItemsPedidoVentaAsync(pedido.Id, items);
+            mensaje = "Partidas actualizadas.";
+            editandoItems = false;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar: {ex.Message}";
+        }
+        finally
+        {
+            procesandoEstatus = false;
+        }
+    }
+
+    private static string EstatusBadge(EstatusPedidoVenta estatus) => estatus switch
+    {
+        EstatusPedidoVenta.Cotizacion => "text-bg-secondary",
+        EstatusPedidoVenta.Pedido => "text-bg-warning",
+        EstatusPedidoVenta.Remisionado => "text-bg-success",
+        EstatusPedidoVenta.Cancelado => "text-bg-dark",
+        _ => "text-bg-light"
+    };
+}

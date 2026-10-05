@@ -1,0 +1,265 @@
+@page "/catalogos/productos"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@using ERP.App.Services
+@inject IErpApiClient Api
+@inject ServerSettingsService ServerSettings
+
+<PageTitle>Productos</PageTitle>
+
+<h1>Productos</h1>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para administrar este catálogo.</div>
+}
+else
+{
+    @if (AppSession.HasRole("Almacen"))
+    {
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5 class="card-title">@(editandoId is null ? "Nuevo producto" : "Editar producto")</h5>
+            <div class="row g-2">
+                <div class="col-md-4"><input class="form-control" placeholder="Nombre" @bind="form.Nombre" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Código" @bind="form.Codigo" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Categoría" @bind="form.Categoria" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Unidad de compra (ej. Tambor 200L)" @bind="form.UnidadCompra" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Unidad de venta (ej. Litro)" @bind="form.UnidadVenta" /></div>
+
+                <div class="col-md-2">
+                    <label class="form-label small mb-0">Precio venta</label>
+                    <input type="number" min="0" step="0.01" class="form-control" @bind="form.Precio" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small mb-0" title="Se recalcula solo (promedio ponderado) cada vez que entra mercancía por una compra">Costo promedio</label>
+                    <input type="number" min="0" step="0.01" class="form-control" @bind="form.Costo" />
+                </div>
+                <div class="col-md-2">
+                    <label class="form-label small mb-0">Stock mínimo</label>
+                    <input type="number" min="0" step="0.01" class="form-control" @bind="form.StockMinimo" />
+                </div>
+                <div class="col-md-3 d-flex align-items-end">
+                    <div class="form-check">
+                        <input class="form-check-input" type="checkbox" id="esPeligroso" @bind="form.EsPeligroso" />
+                        <label class="form-check-label" for="esPeligroso">Material peligroso</label>
+                    </div>
+                </div>
+            </div>
+
+            @if (editandoId is not null)
+            {
+                <div class="mt-3">
+                    <label class="form-label small mb-0">Hoja de seguridad (SDS)</label>
+                    @if (!string.IsNullOrWhiteSpace(form.HojaSeguridadRuta))
+                    {
+                        <div class="mb-1"><a href="@($"{ServerSettings.BaseUrl}/storage/{form.HojaSeguridadRuta}")" target="_blank">@form.HojaSeguridadNombreOriginal</a></div>
+                    }
+                    <InputFile OnChange="OnHojaSeguridadSeleccionada" class="form-control form-control-sm" />
+                    @if (!string.IsNullOrWhiteSpace(mensajeArchivo))
+                    {
+                        <small class="text-muted">@mensajeArchivo</small>
+                    }
+                </div>
+            }
+
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-primary" @onclick="Guardar" disabled="@(guardando || string.IsNullOrWhiteSpace(form.Nombre))">
+                    @(guardando ? "Guardando…" : editandoId is null ? "Agregar" : "Guardar cambios")
+                </button>
+                @if (editandoId is not null)
+                {
+                    <button class="btn btn-outline-secondary" @onclick="CancelarEdicion">Cancelar</button>
+                }
+            </div>
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-1">@mensaje</div>
+            }
+        </div>
+    </div>
+    }
+
+    @if (productos is not null && productos.Count > 0)
+    {
+        <input class="form-control mb-2" style="max-width: 320px;" placeholder="Buscar por nombre, código o categoría…"
+               @bind="filtro" @bind:event="oninput" />
+    }
+
+    @if (productos is null)
+    {
+        <p><em>Cargando…</em></p>
+    }
+    else if (productos.Count == 0)
+    {
+        <p class="text-muted">Todavía no hay productos registrados.</p>
+    }
+    else if (ProductosFiltrados.Count == 0)
+    {
+        <p class="text-muted">Ningún producto coincide con "@filtro".</p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped align-middle">
+            <thead><tr><th>Nombre</th><th>Categoría</th><th>Unidades</th><th>Precio</th><th>Costo</th><th>Margen</th><th>Peligroso</th><th>Estatus</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var p in ProductosFiltrados)
+                {
+                    var margen = p.Precio <= 0 ? 0 : (p.Precio - p.Costo) / p.Precio;
+                    <tr>
+                        <td>@p.Nombre @(!string.IsNullOrWhiteSpace(p.Codigo) ? $"({p.Codigo})" : "")</td>
+                        <td>@p.Categoria</td>
+                        <td>@p.UnidadCompra → @p.UnidadVenta</td>
+                        <td>@p.Precio.ToString("C")</td>
+                        <td>@p.Costo.ToString("C")</td>
+                        <td class="@(margen < 0 ? "text-danger" : "")">@margen.ToString("P0")</td>
+                        <td>@(p.EsPeligroso ? "Sí" : "")</td>
+                        <td>@(p.Activo ? "Activo" : "Inactivo")</td>
+                        <td class="d-flex gap-1">
+                            <a class="btn btn-sm btn-outline-primary" href="@($"/catalogos/productos/{p.Id}")">Ver</a>
+                            @if (AppSession.HasRole("Almacen"))
+                            {
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => Editar(p)">Editar</button>
+                                <button class="btn btn-sm btn-outline-secondary" @onclick="() => AlternarActivo(p)">
+                                    @(p.Activo ? "Desactivar" : "Reactivar")
+                                </button>
+                            }
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<Producto>? productos;
+    private Producto form = new();
+    private int? editandoId;
+    private string? mensajeArchivo;
+    private string? mensaje;
+    private string filtro = string.Empty;
+    private bool guardando;
+
+    private List<Producto> ProductosFiltrados =>
+        string.IsNullOrWhiteSpace(filtro)
+            ? productos ?? []
+            : (productos ?? []).Where(p =>
+                p.Nombre.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (p.Codigo?.Contains(filtro, StringComparison.OrdinalIgnoreCase) ?? false) ||
+                (p.Categoria?.Contains(filtro, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+
+    protected override async Task OnInitializedAsync() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        productos = (await Api.GetProductosAsync()).OrderBy(p => p.Nombre).ToList();
+    }
+
+    private void Editar(Producto producto)
+    {
+        editandoId = producto.Id;
+        mensajeArchivo = null;
+        form = new Producto
+        {
+            Id = producto.Id,
+            Nombre = producto.Nombre,
+            Codigo = producto.Codigo,
+            Categoria = producto.Categoria,
+            UnidadCompra = producto.UnidadCompra,
+            UnidadVenta = producto.UnidadVenta,
+            FactorConversion = producto.FactorConversion,
+            Precio = producto.Precio,
+            Costo = producto.Costo,
+            StockMinimo = producto.StockMinimo,
+            EsPeligroso = producto.EsPeligroso,
+            HojaSeguridadRuta = producto.HojaSeguridadRuta,
+            HojaSeguridadNombreOriginal = producto.HojaSeguridadNombreOriginal
+        };
+    }
+
+    private void CancelarEdicion()
+    {
+        editandoId = null;
+        mensajeArchivo = null;
+        form = new();
+    }
+
+    private async Task Guardar()
+    {
+        if (string.IsNullOrWhiteSpace(form.Nombre))
+        {
+            return;
+        }
+
+        mensaje = null;
+        guardando = true;
+        try
+        {
+            var request = new ProductoRequest(
+                form.Nombre.Trim(), form.Codigo?.Trim(), form.Categoria?.Trim(),
+                form.UnidadCompra?.Trim() ?? string.Empty, form.UnidadVenta?.Trim() ?? string.Empty,
+                form.FactorConversion, form.Precio, form.Costo, form.StockMinimo, form.EsPeligroso);
+
+            if (editandoId is int id)
+            {
+                await Api.ActualizarProductoAsync(id, request);
+            }
+            else
+            {
+                var nuevo = await Api.CrearProductoAsync(request);
+                editandoId = nuevo.Id;
+                form.Id = nuevo.Id;
+            }
+
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task AlternarActivo(Producto producto)
+    {
+        try
+        {
+            await Api.AlternarActivoProductoAsync(producto.Id);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo actualizar el estatus: {ex.Message}";
+        }
+    }
+
+    private async Task OnHojaSeguridadSeleccionada(InputFileChangeEventArgs e)
+    {
+        if (editandoId is not int productoId)
+        {
+            return;
+        }
+
+        const long maxBytes = 10 * 1024 * 1024;
+        var archivo = e.File;
+
+        try
+        {
+            await using var stream = archivo.OpenReadStream(maxBytes);
+            var actualizado = await Api.SubirHojaSeguridadAsync(productoId, stream, archivo.Name);
+
+            form.HojaSeguridadRuta = actualizado.HojaSeguridadRuta;
+            form.HojaSeguridadNombreOriginal = actualizado.HojaSeguridadNombreOriginal;
+            mensajeArchivo = "Archivo guardado.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensajeArchivo = $"No se pudo subir el archivo: {ex.Message}";
+        }
+    }
+}

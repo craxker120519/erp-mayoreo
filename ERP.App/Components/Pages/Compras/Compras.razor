@@ -1,0 +1,82 @@
+@page "/compras"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@inject IErpApiClient Api
+
+<PageTitle>Compras</PageTitle>
+
+<div class="d-flex justify-content-between align-items-center mb-3">
+    <h1>Compras</h1>
+    @if (AppSession.HasRole("Compras"))
+    {
+        <a class="btn btn-primary" href="/compras/nuevo">Nueva orden de compra</a>
+    }
+</div>
+
+@if (pedidos is not null && pedidos.Count > 0)
+{
+    <div class="btn-group mb-3" role="group">
+        @foreach (var opcion in filtros)
+        {
+            <button type="button" class="btn btn-sm @(filtro == opcion ? "btn-secondary" : "btn-outline-secondary")"
+                    @onclick="() => filtro = opcion">
+                @opcion
+            </button>
+        }
+    </div>
+}
+
+@if (pedidos is null)
+{
+    <p><em>Cargando…</em></p>
+}
+else if (pedidos.Count == 0)
+{
+    <p class="text-muted">Todavía no hay órdenes de compra.</p>
+}
+else if (PedidosFiltrados.Count == 0)
+{
+    <p class="text-muted">No hay órdenes con estatus "@filtro".</p>
+}
+else
+{
+    <table class="table table-sm table-striped align-middle">
+        <thead><tr><th>Folio</th><th>Proveedor</th><th>Fecha</th><th>Estatus</th><th>Total</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var p in PedidosFiltrados)
+            {
+                <tr>
+                    <td>@p.Folio</td>
+                    <td>@p.Proveedor.Nombre</td>
+                    <td>@p.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                    <td><span class="badge @EstatusBadge(p.Estatus)">@p.Estatus</span></td>
+                    <td>@p.Total.ToString("C")</td>
+                    <td><a class="btn btn-sm btn-outline-primary" href="/compras/@p.Id">Ver</a></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@code {
+    private List<PedidoCompra>? pedidos;
+    private readonly string[] filtros = ["Todos", "Solicitado", "Recibido", "Cancelado"];
+    private string filtro = "Todos";
+
+    private List<PedidoCompra> PedidosFiltrados =>
+        filtro == "Todos"
+            ? pedidos ?? []
+            : (pedidos ?? []).Where(p => p.Estatus.ToString() == filtro).ToList();
+
+    protected override async Task OnInitializedAsync()
+    {
+        pedidos = (await Api.GetPedidosCompraAsync()).OrderByDescending(p => p.FechaUtc).ToList();
+    }
+
+    private static string EstatusBadge(EstatusPedidoCompra estatus) => estatus switch
+    {
+        EstatusPedidoCompra.Solicitado => "text-bg-warning",
+        EstatusPedidoCompra.Recibido => "text-bg-success",
+        EstatusPedidoCompra.Cancelado => "text-bg-dark",
+        _ => "text-bg-light"
+    };
+}

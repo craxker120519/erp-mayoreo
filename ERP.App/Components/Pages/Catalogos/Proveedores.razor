@@ -1,0 +1,182 @@
+@page "/catalogos/proveedores"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<PageTitle>Proveedores</PageTitle>
+
+<h1>Proveedores</h1>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para administrar este catálogo.</div>
+}
+else
+{
+    <div class="card mb-3">
+        <div class="card-body">
+            <h5 class="card-title">@(editandoId is null ? "Nuevo proveedor" : "Editar proveedor")</h5>
+            <div class="row g-2">
+                <div class="col-md-4"><input class="form-control" placeholder="Nombre / razón social" @bind="form.Nombre" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="RFC" @bind="form.Rfc" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Teléfono" @bind="form.Telefono" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Email" @bind="form.Email" /></div>
+                <div class="col-md-2"><input class="form-control" placeholder="Condiciones de pago" @bind="form.CondicionesPago" /></div>
+                <div class="col-md-2">
+                    <label class="form-label small mb-0">Días de crédito</label>
+                    <input type="number" min="0" class="form-control" @bind="form.DiasCredito" />
+                </div>
+            </div>
+            <div class="mt-3 d-flex gap-2">
+                <button class="btn btn-primary" @onclick="Guardar" disabled="@(guardando || string.IsNullOrWhiteSpace(form.Nombre))">
+                    @(guardando ? "Guardando…" : editandoId is null ? "Agregar" : "Guardar cambios")
+                </button>
+                @if (editandoId is not null)
+                {
+                    <button class="btn btn-outline-secondary" @onclick="CancelarEdicion">Cancelar</button>
+                }
+            </div>
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-1">@mensaje</div>
+            }
+        </div>
+    </div>
+
+    @if (proveedores is not null && proveedores.Count > 0)
+    {
+        <input class="form-control mb-2" style="max-width: 320px;" placeholder="Buscar por nombre o RFC…"
+               @bind="filtro" @bind:event="oninput" />
+    }
+
+    @if (proveedores is null)
+    {
+        <p><em>Cargando…</em></p>
+    }
+    else if (proveedores.Count == 0)
+    {
+        <p class="text-muted">Todavía no hay proveedores registrados.</p>
+    }
+    else if (ProveedoresFiltrados.Count == 0)
+    {
+        <p class="text-muted">Ningún proveedor coincide con "@filtro".</p>
+    }
+    else
+    {
+        <table class="table table-sm table-striped align-middle">
+            <thead><tr><th>Nombre</th><th>RFC</th><th>Contacto</th><th>Condiciones</th><th>Crédito</th><th>Estatus</th><th></th></tr></thead>
+            <tbody>
+                @foreach (var p in ProveedoresFiltrados)
+                {
+                    <tr>
+                        <td>@p.Nombre</td>
+                        <td>@p.Rfc</td>
+                        <td>@p.Telefono @(!string.IsNullOrWhiteSpace(p.Email) ? $"/ {p.Email}" : "")</td>
+                        <td>@p.CondicionesPago</td>
+                        <td>@(p.DiasCredito > 0 ? $"{p.DiasCredito} días" : "Contado")</td>
+                        <td>@(p.Activo ? "Activo" : "Inactivo")</td>
+                        <td class="d-flex gap-1">
+                            <button class="btn btn-sm btn-outline-primary" @onclick="() => Editar(p)">Editar</button>
+                            <button class="btn btn-sm btn-outline-secondary" @onclick="() => AlternarActivo(p)">
+                                @(p.Activo ? "Desactivar" : "Reactivar")
+                            </button>
+                        </td>
+                    </tr>
+                }
+            </tbody>
+        </table>
+    }
+}
+
+@code {
+    private List<Proveedor>? proveedores;
+    private Proveedor form = new();
+    private int? editandoId;
+    private string? mensaje;
+    private string filtro = string.Empty;
+    private bool guardando;
+
+    private List<Proveedor> ProveedoresFiltrados =>
+        string.IsNullOrWhiteSpace(filtro)
+            ? proveedores ?? []
+            : (proveedores ?? []).Where(p =>
+                p.Nombre.Contains(filtro, StringComparison.OrdinalIgnoreCase) ||
+                (p.Rfc?.Contains(filtro, StringComparison.OrdinalIgnoreCase) ?? false)).ToList();
+
+    protected override async Task OnInitializedAsync() => await CargarAsync();
+
+    private async Task CargarAsync()
+    {
+        proveedores = (await Api.GetProveedoresAsync()).OrderBy(p => p.Nombre).ToList();
+    }
+
+    private void Editar(Proveedor proveedor)
+    {
+        editandoId = proveedor.Id;
+        form = new Proveedor
+        {
+            Nombre = proveedor.Nombre,
+            Rfc = proveedor.Rfc,
+            Telefono = proveedor.Telefono,
+            Email = proveedor.Email,
+            CondicionesPago = proveedor.CondicionesPago,
+            DiasCredito = proveedor.DiasCredito
+        };
+    }
+
+    private void CancelarEdicion()
+    {
+        editandoId = null;
+        form = new();
+    }
+
+    private async Task Guardar()
+    {
+        if (string.IsNullOrWhiteSpace(form.Nombre))
+        {
+            return;
+        }
+
+        mensaje = null;
+        guardando = true;
+        try
+        {
+            var request = new ProveedorRequest(
+                form.Nombre.Trim(), form.Rfc?.Trim(), form.Telefono?.Trim(), form.Email?.Trim(),
+                form.CondicionesPago?.Trim(), form.DiasCredito);
+
+            if (editandoId is int id)
+            {
+                await Api.ActualizarProveedorAsync(id, request);
+            }
+            else
+            {
+                await Api.CrearProveedorAsync(request);
+            }
+
+            CancelarEdicion();
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar: {ex.Message}";
+        }
+        finally
+        {
+            guardando = false;
+        }
+    }
+
+    private async Task AlternarActivo(Proveedor proveedor)
+    {
+        try
+        {
+            await Api.AlternarActivoProveedorAsync(proveedor.Id);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo actualizar el estatus: {ex.Message}";
+        }
+    }
+}

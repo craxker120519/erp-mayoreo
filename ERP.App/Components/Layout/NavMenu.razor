@@ -1,0 +1,153 @@
+@using ERP.App.Services
+@inject AppSessionService AppSession
+
+<div class="top-row ps-3 navbar navbar-dark">
+    <div class="container-fluid">
+        <a class="navbar-brand" href="">ERP</a>
+    </div>
+</div>
+
+<input type="checkbox" title="Menú de navegación" class="navbar-toggler" />
+
+<div class="nav-scrollable" onclick="document.querySelector('.navbar-toggler').click()">
+    <nav class="nav flex-column">
+        <div class="nav-item px-3">
+            <NavLink class="nav-link" href="" Match="NavLinkMatch.All">
+                <span class="bi bi-house-door-fill-nav-menu" aria-hidden="true"></span> Inicio
+            </NavLink>
+        </div>
+
+        @if (AppSession.HasRole("Cajero") || AppSession.HasRole("Ventas") || AppSession.HasRole("CuentasPorCobrar") || AppSession.HasRole("Compras") || AppSession.HasRole("CuentasPorPagar") || AppSession.HasRole("Almacen"))
+        {
+            <div class="nav-section-title">Operación</div>
+        }
+
+        @if (AppSession.HasRole("Cajero"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="mostrador">
+                    <span class="bi bi-cash-coin" aria-hidden="true"></span> Mostrador
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Ventas") || AppSession.HasRole("CuentasPorCobrar"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="ventas">
+                    <span class="bi bi-truck" aria-hidden="true"></span> Ventas mayoreo
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Compras") || AppSession.HasRole("CuentasPorPagar"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="compras">
+                    <span class="bi bi-box-seam" aria-hidden="true"></span> Compras
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Almacen"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="traspasos">
+                    <span class="bi bi-arrow-left-right" aria-hidden="true"></span> Traspasos
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Facturacion"))
+        {
+            <div class="nav-section-title">Documentos</div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="facturas">
+                    <span class="bi bi-receipt" aria-hidden="true"></span> Facturas
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="notas-credito">
+                    <span class="bi bi-arrow-return-left" aria-hidden="true"></span> Notas de crédito
+                </NavLink>
+            </div>
+        }
+
+        <div class="nav-section-title">Catálogos</div>
+
+        @if (AppSession.HasRole("Almacen") || AppSession.HasRole("Ventas") || AppSession.HasRole("Compras"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="catalogos/productos">
+                    <span class="bi bi-droplet-half" aria-hidden="true"></span> Productos
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Ventas") || AppSession.HasRole("Facturacion"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="catalogos/clientes">
+                    <span class="bi bi-people-fill" aria-hidden="true"></span> Clientes
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Compras"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="catalogos/proveedores">
+                    <span class="bi bi-building" aria-hidden="true"></span> Proveedores
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.IsAdmin)
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="catalogos/empleados">
+                    <span class="bi bi-person-badge" aria-hidden="true"></span> Empleados
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Almacen"))
+        {
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="catalogos/almacenes">
+                    <span class="bi bi-building" aria-hidden="true"></span> Almacenes
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.HasRole("Almacen") || AppSession.HasRole("Ventas") || AppSession.HasRole("Compras") || AppSession.HasRole("Facturacion") || AppSession.HasRole("CuentasPorCobrar") || AppSession.HasRole("CuentasPorPagar"))
+        {
+            <div class="nav-section-title">Análisis</div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="reportes">
+                    <span class="bi bi-bar-chart-fill" aria-hidden="true"></span> Reportes
+                </NavLink>
+            </div>
+        }
+
+        @if (AppSession.IsAdmin)
+        {
+            <div class="nav-section-title">Administración</div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="administracion/usuarios">
+                    <span class="bi bi-person-gear" aria-hidden="true"></span> Usuarios
+                </NavLink>
+            </div>
+
+            <div class="nav-item px-3">
+                <NavLink class="nav-link" href="bitacora">
+                    <span class="bi bi-clock-history" aria-hidden="true"></span> Bitácora
+                </NavLink>
+            </div>
+        }
+    </nav>
+</div>

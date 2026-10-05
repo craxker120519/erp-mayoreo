@@ -1,0 +1,138 @@
+@using ERP.App.Services
+@inject ServerSettingsService ServerSettings
+@inject IErpApiClient Api
+@inject AppSessionService AppSession
+
+<div class="login-screen d-flex align-items-center justify-content-center">
+    <div class="card shadow login-card">
+        <div class="card-body p-4">
+            <div class="text-center mb-4">
+                <div class="login-badge mb-2">ERP</div>
+                <div class="text-muted small">Mayoreo y distribución</div>
+            </div>
+
+            @if (string.IsNullOrWhiteSpace(ServerSettings.BaseUrl) || editandoServidor)
+            {
+                <h6 class="text-muted">Conectar al servidor de la oficina</h6>
+                <p class="text-muted small">Pide la dirección al administrador del sistema (ej. <code>http://192.168.1.50:5080</code>).</p>
+                <div class="mb-2">
+                    <input class="form-control" placeholder="http://192.168.1.50:5080" @bind="servidorUrl" @bind:event="oninput" />
+                </div>
+                <button class="btn btn-primary w-100" @onclick="GuardarServidor" disabled="@string.IsNullOrWhiteSpace(servidorUrl)">
+                    Guardar servidor
+                </button>
+                @if (!string.IsNullOrWhiteSpace(ServerSettings.BaseUrl))
+                {
+                    <button class="btn btn-link w-100" @onclick="() => editandoServidor = false">Cancelar</button>
+                }
+            }
+            else
+            {
+                <p class="text-muted small mb-3">
+                    Servidor: <strong>@ServerSettings.BaseUrl</strong>
+                    <a href="#" @onclick="() => editandoServidor = true" @onclick:preventDefault>(cambiar)</a>
+                </p>
+                <div class="mb-2">
+                    <input class="form-control" placeholder="Usuario" @bind="username" @bind:event="oninput"
+                           @onkeyup="OnKeyUp" />
+                </div>
+                <div class="mb-3">
+                    <input type="password" class="form-control" placeholder="Contraseña" @bind="password" @bind:event="oninput"
+                           @onkeyup="OnKeyUp" />
+                </div>
+                <button class="btn btn-primary w-100" @onclick="Entrar"
+                        disabled="@(entrando || string.IsNullOrWhiteSpace(username) || string.IsNullOrWhiteSpace(password))">
+                    @(entrando ? "Entrando…" : "Entrar")
+                </button>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="alert alert-danger mt-3 mb-0 py-2">@mensaje</div>
+            }
+        </div>
+    </div>
+</div>
+
+<style>
+    .login-screen {
+        min-height: 100vh;
+        background: linear-gradient(160deg, #0a2e26 0%, #123b52 100%);
+    }
+
+    .login-card {
+        width: 380px;
+        border: none;
+        border-radius: 10px;
+    }
+
+    .login-badge {
+        display: inline-block;
+        background: #0f5c4a;
+        color: white;
+        font-weight: 700;
+        letter-spacing: 0.05em;
+        padding: 0.4rem 1.1rem;
+        border-radius: 6px;
+        font-size: 1.1rem;
+    }
+</style>
+
+@code {
+    private string servidorUrl = string.Empty;
+    private bool editandoServidor;
+    private string username = string.Empty;
+    private string password = string.Empty;
+    private string? mensaje;
+    private bool entrando;
+
+    protected override void OnInitialized()
+    {
+        servidorUrl = ServerSettings.BaseUrl ?? string.Empty;
+    }
+
+    private void GuardarServidor()
+    {
+        if (string.IsNullOrWhiteSpace(servidorUrl))
+        {
+            return;
+        }
+
+        ServerSettings.SetBaseUrl(servidorUrl.Trim());
+        editandoServidor = false;
+        mensaje = null;
+    }
+
+    private async Task OnKeyUp(Microsoft.AspNetCore.Components.Web.KeyboardEventArgs e)
+    {
+        if (e.Key == "Enter" && !entrando && !string.IsNullOrWhiteSpace(username) && !string.IsNullOrWhiteSpace(password))
+        {
+            await Entrar();
+        }
+    }
+
+    private async Task Entrar()
+    {
+        mensaje = null;
+        entrando = true;
+        try
+        {
+            var respuesta = await Api.LoginAsync(username.Trim(), password);
+            if (respuesta is null)
+            {
+                mensaje = "Usuario o contraseña incorrectos.";
+                return;
+            }
+
+            await AppSession.SetSessionAsync(respuesta.Token, respuesta.Username, respuesta.Roles);
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo conectar al servidor: {ex.Message}";
+        }
+        finally
+        {
+            entrando = false;
+        }
+    }
+}

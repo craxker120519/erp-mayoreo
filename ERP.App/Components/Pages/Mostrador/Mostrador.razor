@@ -1,0 +1,357 @@
+@page "/mostrador"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<PageTitle>Mostrador</PageTitle>
+
+<h1>Mostrador</h1>
+
+@if (!IsAuthenticated)
+{
+    <div class="alert alert-warning">Inicia sesión para operar el mostrador.</div>
+}
+else if (turnoAbierto is null)
+{
+    @if (turnoCerradoId is int idCerrado)
+    {
+        <div class="alert alert-success d-flex justify-content-between align-items-center" style="max-width: 420px;">
+            <span>Turno cerrado correctamente.</span>
+            <button class="btn btn-sm btn-outline-success" @onclick="() => DescargarCorte(idCerrado)">Descargar corte de caja</button>
+        </div>
+    }
+    <div class="card" style="max-width: 420px;">
+        <div class="card-body">
+            <h5 class="card-title">Abrir turno de caja</h5>
+            <div class="mb-2">
+                <label class="form-label">Cajero</label>
+                <select class="form-select" @bind="cajeroSeleccionadoId">
+                    <option value="">Selecciona…</option>
+                    @foreach (var e in empleados)
+                    {
+                        <option value="@e.Id">@e.Nombre</option>
+                    }
+                </select>
+            </div>
+            @if (almacenes.Count > 1)
+            {
+                <div class="mb-2">
+                    <label class="form-label">Almacén</label>
+                    <select class="form-select" @bind="almacenId">
+                        <option value="">Principal</option>
+                        @foreach (var a in almacenes)
+                        {
+                            <option value="@a.Id">@a.Nombre</option>
+                        }
+                    </select>
+                </div>
+            }
+            <div class="mb-3">
+                <label class="form-label">Monto inicial en caja</label>
+                <input type="number" min="0" step="0.01" class="form-control" @bind="montoInicial" />
+            </div>
+            <button class="btn btn-primary" @onclick="AbrirTurno" disabled="@(procesando || cajeroSeleccionadoId is null)">
+                @(procesando ? "Abriendo…" : "Abrir turno")
+            </button>
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="alert alert-danger mt-2 mb-0 py-1">@mensaje</div>
+            }
+        </div>
+    </div>
+}
+else
+{
+    <div class="alert alert-info d-flex justify-content-between align-items-center">
+        <span>
+            Turno abierto por <strong>@turnoAbierto.CajeroEmpleado.Nombre</strong>
+            @(turnoAbierto.Almacen is not null ? $"en {turnoAbierto.Almacen.Nombre}" : "")
+            — inicio con @turnoAbierto.MontoInicial.ToString("C")
+        </span>
+        <button class="btn btn-sm btn-outline-danger" @onclick="() => mostrarCierre = true">Cerrar turno</button>
+    </div>
+
+    @if (mostrarCierre)
+    {
+        var esperado = CalcularMontoEsperado();
+        <div class="card mb-3 border-danger">
+            <div class="card-body">
+                <h5 class="card-title">Cerrar turno</h5>
+                <p>Efectivo esperado en caja: <strong>@esperado.ToString("C")</strong> (inicial + ventas en efectivo del turno)</p>
+                <div class="mb-2" style="max-width: 260px;">
+                    <label class="form-label">Efectivo contado</label>
+                    <input type="number" min="0" step="0.01" class="form-control" @bind="montoContado" />
+                </div>
+                @{
+                    var diferencia = montoContado - esperado;
+                }
+                <p class="@(diferencia == 0 ? "text-success" : "text-danger")">Diferencia: @diferencia.ToString("C")</p>
+                <div class="d-flex gap-2">
+                    <button class="btn btn-danger" @onclick="CerrarTurno" disabled="@procesando">
+                        @(procesando ? "Cerrando…" : "Confirmar cierre")
+                    </button>
+                    <button class="btn btn-outline-secondary" @onclick="() => mostrarCierre = false">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <div class="row">
+        <div class="col-md-7">
+            <div class="card mb-3">
+                <div class="card-body">
+                    <h5 class="card-title">Agregar producto</h5>
+                    <div class="row g-2">
+                        <div class="col-6">
+                            <select class="form-select" @bind="productoSeleccionadoId">
+                                <option value="">Selecciona producto…</option>
+                                @foreach (var p in productos)
+                                {
+                                    <option value="@p.Id">@p.Nombre — @p.Precio.ToString("C")/@p.UnidadVenta</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="col-3">
+                            <input type="number" min="0.01" step="0.01" class="form-control" @bind="cantidadAgregar" placeholder="Cantidad" />
+                        </div>
+                        <div class="col-3">
+                            <button class="btn btn-outline-primary w-100" @onclick="AgregarAlCarrito" disabled="@(productoSeleccionadoId is null)">Agregar</button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <table class="table table-sm">
+                <thead><tr><th>Producto</th><th>Cantidad</th><th>Importe</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var item in carrito)
+                    {
+                        <tr>
+                            <td>@item.Producto.Nombre</td>
+                            <td>@item.Cantidad @item.Producto.UnidadVenta</td>
+                            <td>@((item.Cantidad * item.Producto.Precio).ToString("C"))</td>
+                            <td><button class="btn btn-sm btn-outline-danger" @onclick="() => QuitarDelCarrito(item.Producto.Id)">×</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+
+            <div class="d-flex justify-content-between align-items-center">
+                <h4>Total: @Total.ToString("C")</h4>
+                <div class="d-flex gap-2 align-items-center">
+                    <select class="form-select" @bind="metodoPago" style="width: auto;">
+                        <option value="@MetodoPago.Efectivo">Efectivo</option>
+                        <option value="@MetodoPago.Tarjeta">Tarjeta</option>
+                        <option value="@MetodoPago.Transferencia">Transferencia</option>
+                    </select>
+                    <button class="btn btn-success" @onclick="RegistrarVenta" disabled="@(procesando || carrito.Count == 0)">
+                        @(procesando ? "Cobrando…" : "Cobrar")
+                    </button>
+                </div>
+            </div>
+            @if (!string.IsNullOrWhiteSpace(mensaje))
+            {
+                <div class="alert alert-info mt-2 py-1">@mensaje</div>
+            }
+        </div>
+
+        <div class="col-md-5">
+            <h5>Ventas de este turno</h5>
+            <table class="table table-sm">
+                <thead><tr><th>Folio</th><th>Método</th><th>Total</th><th></th></tr></thead>
+                <tbody>
+                    @foreach (var v in ventasDelTurno)
+                    {
+                        <tr>
+                            <td>@v.Folio</td>
+                            <td>@v.MetodoPago</td>
+                            <td>@v.Total.ToString("C")</td>
+                            <td><button class="btn btn-sm btn-outline-secondary" @onclick="() => DescargarTicket(v.Id, v.Folio)">Ticket</button></td>
+                        </tr>
+                    }
+                </tbody>
+            </table>
+        </div>
+    </div>
+}
+
+@code {
+    private List<Empleado> empleados = [];
+    private List<Producto> productos = [];
+    private List<Almacen> almacenes = [];
+    private TurnoCaja? turnoAbierto;
+    private List<VentaMostrador> ventasDelTurno = [];
+
+    private int? cajeroSeleccionadoId;
+    private int? almacenId;
+    private decimal montoInicial;
+
+    private bool mostrarCierre;
+    private decimal montoContado;
+    private int? turnoCerradoId;
+
+    private int? productoSeleccionadoId;
+    private decimal cantidadAgregar = 1;
+    private readonly List<(Producto Producto, decimal Cantidad)> carrito = [];
+    private MetodoPago metodoPago = MetodoPago.Efectivo;
+
+    private string? mensaje;
+    private bool procesando;
+
+    private decimal Total => carrito.Sum(i => i.Cantidad * i.Producto.Precio);
+
+    protected override async Task OnInitializedAsync()
+    {
+        empleados = (await Api.GetEmpleadosAsync()).Where(e => e.Activo).OrderBy(e => e.Nombre).ToList();
+        productos = (await Api.GetProductosAsync()).Where(p => p.Activo).OrderBy(p => p.Nombre).ToList();
+        almacenes = (await Api.GetAlmacenesAsync()).Where(a => a.Activo).OrderBy(a => a.Nombre).ToList();
+        await CargarTurnoAsync();
+    }
+
+    private async Task CargarTurnoAsync()
+    {
+        turnoAbierto = await Api.GetTurnoActualAsync();
+        ventasDelTurno = turnoAbierto?.Ventas.ToList() ?? [];
+    }
+
+    private async Task AbrirTurno()
+    {
+        if (cajeroSeleccionadoId is not int cajeroId)
+        {
+            mensaje = "Selecciona un cajero.";
+            return;
+        }
+
+        procesando = true;
+        try
+        {
+            await Api.AbrirTurnoAsync(new AbrirTurnoRequest(cajeroId, almacenId, montoInicial));
+            mensaje = null;
+            montoInicial = 0;
+            cajeroSeleccionadoId = null;
+            almacenId = null;
+            turnoCerradoId = null;
+            await CargarTurnoAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el turno: {ex.Message}";
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private void AgregarAlCarrito()
+    {
+        if (productoSeleccionadoId is not int id || cantidadAgregar <= 0)
+        {
+            return;
+        }
+
+        var producto = productos.First(p => p.Id == id);
+        var indice = carrito.FindIndex(i => i.Producto.Id == id);
+        if (indice >= 0)
+        {
+            carrito[indice] = (producto, carrito[indice].Cantidad + cantidadAgregar);
+        }
+        else
+        {
+            carrito.Add((producto, cantidadAgregar));
+        }
+
+        productoSeleccionadoId = null;
+        cantidadAgregar = 1;
+    }
+
+    private void QuitarDelCarrito(int productoId) => carrito.RemoveAll(i => i.Producto.Id == productoId);
+
+    private async Task RegistrarVenta()
+    {
+        if (turnoAbierto is null || carrito.Count == 0)
+        {
+            return;
+        }
+
+        procesando = true;
+        try
+        {
+            var request = new CrearVentaMostradorRequest(
+                null, metodoPago, carrito.Select(i => new ItemRequest(i.Producto.Id, i.Cantidad)).ToList());
+            var venta = await Api.RegistrarVentaMostradorAsync(turnoAbierto.Id, request);
+
+            carrito.Clear();
+            mensaje = $"Venta {venta.Folio} registrada.";
+            await CargarTurnoAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo registrar la venta: {ex.Message}";
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private decimal CalcularMontoEsperado() =>
+        (turnoAbierto?.MontoInicial ?? 0) + ventasDelTurno.Where(v => v.MetodoPago == MetodoPago.Efectivo).Sum(v => v.Total);
+
+    private async Task CerrarTurno()
+    {
+        if (turnoAbierto is null)
+        {
+            return;
+        }
+
+        procesando = true;
+        try
+        {
+            turnoCerradoId = turnoAbierto.Id;
+            await Api.CerrarTurnoAsync(turnoAbierto.Id, new CerrarTurnoRequest(montoContado));
+            mostrarCierre = false;
+            montoContado = 0;
+            await CargarTurnoAsync();
+        }
+        catch (Exception ex)
+        {
+            turnoCerradoId = null;
+            mensaje = $"No se pudo cerrar el turno: {ex.Message}";
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private async Task DescargarTicket(int ventaId, string folio)
+    {
+        try
+        {
+            var bytes = await Api.GetVentaMostradorPdfAsync(ventaId);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"{folio}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Ticket", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+
+    private async Task DescargarCorte(int turnoId)
+    {
+        try
+        {
+            var bytes = await Api.GetTurnoCajaPdfAsync(turnoId);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"corte-caja-{turnoId}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Corte de caja", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+}

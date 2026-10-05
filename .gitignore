@@ -1,0 +1,9 @@
+bin/
+obj/
+.vs/
+*.user
+PersistedStorage/
+ERP.Api/appsettings.Production.json
+_archive-fase1-blazor-web/
+publish/
+Manuales/

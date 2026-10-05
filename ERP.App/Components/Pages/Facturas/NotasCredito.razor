@@ -1,0 +1,70 @@
+@page "/notas-credito"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@inject IErpApiClient Api
+
+<PageTitle>Notas de crédito</PageTitle>
+
+<h1>Notas de crédito</h1>
+<p class="text-muted">Se generan desde el detalle de un pedido ya remisionado, en Ventas mayoreo — por devoluciones o ajustes.</p>
+
+@if (notas is null)
+{
+    <p><em>Cargando…</em></p>
+}
+else if (notas.Count == 0)
+{
+    <p class="text-muted">Todavía no se ha generado ninguna nota de crédito.</p>
+}
+else
+{
+    <table class="table table-sm table-striped align-middle">
+        <thead><tr><th>Folio</th><th>Pedido</th><th>Cliente</th><th>Fecha</th><th>Motivo</th><th>Total</th><th>Disponible</th><th>Inventario</th><th>Estatus</th><th></th></tr></thead>
+        <tbody>
+            @foreach (var n in notas)
+            {
+                <tr>
+                    <td>@n.Folio</td>
+                    <td><a href="/ventas/@n.PedidoVentaId">@n.PedidoVenta.Folio</a></td>
+                    <td>@n.PedidoVenta.Cliente.Nombre</td>
+                    <td>@n.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy")</td>
+                    <td>@n.Motivo</td>
+                    <td>@n.Total.ToString("C")</td>
+                    <td>@n.Disponible.ToString("C")</td>
+                    <td>@(n.DevuelveInventario ? "Sí regresó" : "No")</td>
+                    <td><span class="badge @(n.Estatus == EstatusNotaCredito.Cancelada ? "text-bg-dark" : "text-bg-secondary")">@n.Estatus</span></td>
+                    <td><button class="btn btn-sm btn-outline-secondary" @onclick="() => DescargarPdf(n.Id, n.Folio)">PDF</button></td>
+                </tr>
+            }
+        </tbody>
+    </table>
+}
+
+@if (!string.IsNullOrWhiteSpace(mensaje))
+{
+    <div class="alert alert-danger mt-2">@mensaje</div>
+}
+
+@code {
+    private List<NotaCredito>? notas;
+    private string? mensaje;
+
+    protected override async Task OnInitializedAsync()
+    {
+        notas = await Api.GetNotasCreditoAsync();
+    }
+
+    private async Task DescargarPdf(int id, string folio)
+    {
+        try
+        {
+            var bytes = await Api.GetNotaCreditoPdfAsync(id);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"{folio}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Nota de crédito", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+}

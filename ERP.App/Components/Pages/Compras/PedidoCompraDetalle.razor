@@ -1,0 +1,363 @@
+@page "/compras/{Id:int}"
+@inherits ERP.App.Components.AuthAwareComponentBase
+@using ERP.App.Dtos
+@inject IErpApiClient Api
+
+<PageTitle>Orden de compra</PageTitle>
+
+@if (pedido is null)
+{
+    <p><em>Cargando…</em></p>
+}
+else
+{
+    <h1>
+        @pedido.Folio <span class="badge @EstatusBadge(pedido.Estatus)">@pedido.Estatus</span>
+        @if (pedido.Tipo == TipoPedidoCompra.GastoInterno)
+        {
+            <span class="badge text-bg-dark">Gasto interno — no sube a stock</span>
+        }
+    </h1>
+    <p>Proveedor: <strong>@pedido.Proveedor.Nombre</strong> — @pedido.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy HH:mm")</p>
+    @if (!string.IsNullOrWhiteSpace(pedido.Nota))
+    {
+        <p class="text-muted">@pedido.Nota</p>
+    }
+
+    <div class="d-flex flex-wrap gap-2 align-items-center mb-3 small">
+        <span class="badge text-bg-secondary">Solicitado @pedido.Folio — @pedido.FechaUtc.ToLocalTime().ToString("dd/MM/yy")</span>
+        <span class="text-muted">→</span>
+        @if (pedido.RecibidoUtc is DateTime fechaRecibido)
+        {
+            <span class="badge text-bg-success">Recibido — @fechaRecibido.ToLocalTime().ToString("dd/MM/yy")</span>
+        }
+        else if (pedido.Estatus == EstatusPedidoCompra.Cancelado)
+        {
+            <span class="badge text-bg-dark">Cancelado</span>
+        }
+        else
+        {
+            <span class="badge text-bg-light text-muted border">Recepción (pendiente)</span>
+        }
+    </div>
+
+    @if (!editandoItems)
+    {
+        <table class="table table-sm">
+            <thead><tr><th>Producto</th><th>Cantidad</th><th>Costo</th><th>Importe</th></tr></thead>
+            <tbody>
+                @foreach (var item in pedido.Items)
+                {
+                    <tr>
+                        <td>@(item.Producto?.Nombre ?? item.Descripcion)</td>
+                        <td>@item.Cantidad @item.Producto?.UnidadVenta</td>
+                        <td>@item.CostoUnitario.ToString("C")</td>
+                        <td>@item.Importe.ToString("C")</td>
+                    </tr>
+                }
+            </tbody>
+            <tfoot><tr><th colspan="3" class="text-end">Total</th><th>@pedido.Total.ToString("C")</th></tr></tfoot>
+        </table>
+    }
+    else
+    {
+        <div class="card mb-3" style="max-width: 700px;">
+            <div class="card-body">
+                <h6 class="card-title">Editar partidas</h6>
+                <div class="row g-2 mb-2">
+                    <div class="col-4">
+                        <select class="form-select form-select-sm" @bind="productoEditarId">
+                            <option value="">Selecciona producto…</option>
+                            @foreach (var p in productos)
+                            {
+                                <option value="@p.Id">@p.Nombre (@p.UnidadVenta)</option>
+                            }
+                        </select>
+                    </div>
+                    <div class="col-3">
+                        <input type="number" min="0.01" step="0.01" class="form-control form-control-sm" @bind="cantidadEditar" placeholder="Cantidad" />
+                    </div>
+                    <div class="col-3">
+                        <input type="number" min="0" step="0.01" class="form-control form-control-sm" @bind="costoEditar" placeholder="Costo unitario" />
+                    </div>
+                    <div class="col-2">
+                        <button class="btn btn-outline-primary btn-sm w-100" @onclick="AgregarItemEditar" disabled="@(productoEditarId is null)">Agregar</button>
+                    </div>
+                </div>
+
+                <table class="table table-sm mb-2">
+                    <thead><tr><th>Producto</th><th>Cantidad</th><th>Costo</th><th>Importe</th><th></th></tr></thead>
+                    <tbody>
+                        @foreach (var item in carritoEditar)
+                        {
+                            <tr>
+                                <td>@item.Producto.Nombre</td>
+                                <td>@item.Cantidad @item.Producto.UnidadVenta</td>
+                                <td>@item.Costo.ToString("C")</td>
+                                <td>@((item.Cantidad * item.Costo).ToString("C"))</td>
+                                <td><button class="btn btn-sm btn-outline-danger" @onclick="() => carritoEditar.Remove(item)">×</button></td>
+                            </tr>
+                        }
+                    </tbody>
+                </table>
+
+                <div class="d-flex gap-2">
+                    <button class="btn btn-primary btn-sm" @onclick="GuardarItemsEditar" disabled="@(procesando || carritoEditar.Count == 0)">
+                        @(procesando ? "Guardando…" : "Guardar cambios")
+                    </button>
+                    <button class="btn btn-outline-secondary btn-sm" @onclick="() => editandoItems = false">Cancelar</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    @if (IsAuthenticated)
+    {
+        <div class="d-flex gap-2">
+            @if (AppSession.HasRole("Compras") && pedido.Estatus == EstatusPedidoCompra.Solicitado)
+            {
+                <button class="btn btn-success" @onclick="Recibir" disabled="@procesando">
+                    @(procesando ? "Recibiendo…" : pedido.Tipo == TipoPedidoCompra.Inventario ? "Recibir (agrega a inventario)" : "Recibir (marcar como cerrado)")
+                </button>
+                @if (!editandoItems && pedido.Tipo == TipoPedidoCompra.Inventario)
+                {
+                    <button class="btn btn-outline-primary" @onclick="IniciarEdicionItems">Editar partidas</button>
+                }
+                <button class="btn btn-outline-danger" @onclick="Cancelar" disabled="@procesando">Cancelar</button>
+            }
+            <button class="btn btn-outline-secondary" @onclick="DescargarPdf">Descargar PDF</button>
+        </div>
+
+        @if (AppSession.HasRole("Compras") || AppSession.HasRole("CuentasPorPagar"))
+        {
+        <CandadoGate Nombre="Cuentas">
+            <h5 class="mt-4">Cuenta por pagar</h5>
+            <p>Saldo pendiente: <strong class="@(saldo > 0 ? "text-danger" : "text-success")">@saldo.ToString("C")</strong></p>
+
+            @if (saldo > 0)
+            {
+                <div class="row g-2 mb-3" style="max-width: 500px;">
+                    <div class="col-6">
+                        <input type="number" min="0.01" step="0.01" max="@saldo" class="form-control" @bind="montoPago" placeholder="Monto" />
+                    </div>
+                    <div class="col-4">
+                        <input class="form-control" @bind="metodoPago" placeholder="Método (efectivo, transferencia…)" />
+                    </div>
+                    <div class="col-2">
+                        <button class="btn btn-primary w-100" @onclick="RegistrarPago" disabled="@procesandoPago">
+                            @(procesandoPago ? "…" : "Pagar")
+                        </button>
+                    </div>
+                </div>
+            }
+
+            @if (pedido.Pagos.Count > 0)
+            {
+                <table class="table table-sm">
+                    <thead><tr><th>Fecha</th><th>Monto</th><th>Método</th></tr></thead>
+                    <tbody>
+                        @foreach (var pago in pedido.Pagos.OrderBy(p => p.FechaUtc))
+                        {
+                            <tr><td>@pago.FechaUtc.ToLocalTime().ToString("dd/MM/yyyy")</td><td>@pago.Monto.ToString("C")</td><td>@pago.MetodoPago</td></tr>
+                        }
+                    </tbody>
+                </table>
+            }
+        </CandadoGate>
+        }
+    }
+
+    @if (!string.IsNullOrWhiteSpace(mensaje))
+    {
+        <div class="alert alert-info mt-2">@mensaje</div>
+    }
+}
+
+@code {
+    [Parameter] public int Id { get; set; }
+
+    private PedidoCompra? pedido;
+    private string? mensaje;
+    private bool procesando;
+    private decimal saldo;
+    private decimal montoPago;
+    private string metodoPago = "Efectivo";
+    private bool procesandoPago;
+
+    private List<Producto> productos = [];
+    private bool editandoItems;
+    private int? productoEditarId;
+    private decimal cantidadEditar = 1;
+    private decimal costoEditar;
+    private readonly List<(Producto Producto, decimal Cantidad, decimal Costo)> carritoEditar = [];
+
+    protected override async Task OnInitializedAsync()
+    {
+        productos = (await Api.GetProductosAsync()).Where(p => p.Activo).OrderBy(p => p.Nombre).ToList();
+        await CargarAsync();
+    }
+
+    private async Task CargarAsync()
+    {
+        pedido = await Api.GetPedidoCompraAsync(Id);
+        saldo = pedido is null ? 0 : pedido.Total - pedido.Pagos.Sum(p => p.Monto);
+    }
+
+    private async Task RegistrarPago()
+    {
+        if (pedido is null || montoPago <= 0 || montoPago > saldo)
+        {
+            mensaje = "Monto inválido.";
+            return;
+        }
+
+        procesandoPago = true;
+        try
+        {
+            await Api.RegistrarPagoProveedorAsync(pedido.Id, new RegistrarPagoRequest(montoPago, metodoPago));
+            montoPago = 0;
+            mensaje = "Pago registrado.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo registrar el pago: {ex.Message}";
+        }
+        finally
+        {
+            procesandoPago = false;
+        }
+    }
+
+    private async Task Recibir()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        procesando = true;
+        try
+        {
+            await Api.RecibirPedidoCompraAsync(pedido.Id);
+            mensaje = "Inventario actualizado y orden marcada como recibida.";
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo recibir la orden: {ex.Message}";
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private async Task Cancelar()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        procesando = true;
+        try
+        {
+            await Api.CancelarPedidoCompraAsync(pedido.Id);
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo cancelar: {ex.Message}";
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private async Task DescargarPdf()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var bytes = await Api.GetPedidoCompraPdfAsync(pedido.Id);
+            var ruta = Path.Combine(FileSystem.CacheDirectory, $"{pedido.Folio}-{DateTime.Now:HHmmssfff}.pdf");
+            await File.WriteAllBytesAsync(ruta, bytes);
+            await Launcher.Default.OpenAsync(new OpenFileRequest("Orden de compra", new ReadOnlyFile(ruta)));
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo abrir el PDF: {ex.Message}";
+        }
+    }
+
+    private void IniciarEdicionItems()
+    {
+        if (pedido is null)
+        {
+            return;
+        }
+
+        carritoEditar.Clear();
+        foreach (var item in pedido.Items)
+        {
+            var producto = productos.FirstOrDefault(p => p.Id == item.ProductoId) ?? item.Producto!;
+            carritoEditar.Add((producto, item.Cantidad, item.CostoUnitario));
+        }
+
+        editandoItems = true;
+    }
+
+    private void AgregarItemEditar()
+    {
+        if (productoEditarId is not int id || cantidadEditar <= 0)
+        {
+            return;
+        }
+
+        var producto = productos.First(p => p.Id == id);
+        carritoEditar.Add((producto, cantidadEditar, costoEditar));
+        productoEditarId = null;
+        cantidadEditar = 1;
+        costoEditar = 0;
+    }
+
+    private async Task GuardarItemsEditar()
+    {
+        if (pedido is null || carritoEditar.Count == 0)
+        {
+            return;
+        }
+
+        procesando = true;
+        try
+        {
+            var items = carritoEditar.Select(i => new ItemCompraRequest(i.Producto.Id, null, i.Cantidad, i.Costo)).ToList();
+            await Api.ActualizarItemsPedidoCompraAsync(pedido.Id, items);
+            mensaje = "Partidas actualizadas.";
+            editandoItems = false;
+            await CargarAsync();
+        }
+        catch (Exception ex)
+        {
+            mensaje = $"No se pudo guardar: {ex.Message}";
+        }
+        finally
+        {
+            procesando = false;
+        }
+    }
+
+    private static string EstatusBadge(EstatusPedidoCompra estatus) => estatus switch
+    {
+        EstatusPedidoCompra.Solicitado => "text-bg-warning",
+        EstatusPedidoCompra.Recibido => "text-bg-success",
+        EstatusPedidoCompra.Cancelado => "text-bg-dark",
+        _ => "text-bg-light"
+    };
+}
